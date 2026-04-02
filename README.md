@@ -2,7 +2,7 @@
 
 Reusable GitHub Actions workflows for CORS Pimcore projects and bundles.
 
-**Replaces:** `.project-gitlab-ci.yml`, `.bundle-gitlab-ci.yml`, `.kaniko-project-gitlab-ci.yml`
+**Replaces:** `.project-gitlab-ci.yml`, `.bundle-gitlab-ci.yml`
 
 ## Workflows
 

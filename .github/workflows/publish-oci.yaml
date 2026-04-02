@@ -51,6 +51,9 @@ jobs:
           IMAGE="ghcr.io/$(echo "$REPO" | tr '[:upper:]' '[:lower:]')"
           echo "name=${IMAGE}" >> "$GITHUB_OUTPUT"
 
+      - name: Install oras
+        uses: oras-project/setup-oras@v1
+
       - name: Publish OCI artifact
         env:
           IMAGE: ${{ steps.image.outputs.name }}
@@ -59,9 +62,9 @@ jobs:
           ALSO_LATEST: ${{ inputs.also-tag-latest }}
         run: |
           echo "Publishing ${IMAGE}:${TAG}"
-          docker compose -f "$COMPOSE_FILE" publish "${IMAGE}:${TAG}"
+          oras push "${IMAGE}:${TAG}" "${COMPOSE_FILE}:application/vnd.docker.compose.file+yaml"
 
           if [ "$ALSO_LATEST" = "true" ]; then
             echo "Publishing ${IMAGE}:latest"
-            docker compose -f "$COMPOSE_FILE" publish "${IMAGE}:latest"
+            oras push "${IMAGE}:latest" "${COMPOSE_FILE}:application/vnd.docker.compose.file+yaml"
           fi
