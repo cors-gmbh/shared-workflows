@@ -88,8 +88,8 @@ jobs:
 
     steps:
       - name: Create GitHub App Token
-        if: secrets.gh_app_private_key != ''
         id: app-token
+        continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ vars.GH_APP_ID }}
@@ -164,8 +164,8 @@ jobs:
 
     steps:
       - name: Create GitHub App Token
-        if: secrets.gh_app_private_key != ''
         id: app-token
+        continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ vars.GH_APP_ID }}
