@@ -62,9 +62,9 @@ jobs:
           ALSO_LATEST: ${{ inputs.also-tag-latest }}
         run: |
           echo "Publishing ${IMAGE}:${TAG}"
-          oras push "${IMAGE}:${TAG}" "${COMPOSE_FILE}:application/vnd.docker.compose.file+yaml"
+          oras push --artifact-type application/vnd.docker.compose.project "${IMAGE}:${TAG}" "${COMPOSE_FILE}:application/vnd.docker.compose.file+yaml"
 
           if [ "$ALSO_LATEST" = "true" ]; then
             echo "Publishing ${IMAGE}:latest"
-            oras push "${IMAGE}:latest" "${COMPOSE_FILE}:application/vnd.docker.compose.file+yaml"
+            oras push --artifact-type application/vnd.docker.compose.project "${IMAGE}:latest" "${COMPOSE_FILE}:application/vnd.docker.compose.file+yaml"
           fi
