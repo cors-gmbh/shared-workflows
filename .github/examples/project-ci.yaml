@@ -1,0 +1,117 @@
+# =============================================================================
+# Example: Pimcore PROJECT CI/CD
+# =============================================================================
+# Place this as .github/workflows/ci.yaml in your Pimcore project repo.
+# This replaces the old GitLab .project-gitlab-ci.yml include.
+#
+# Adjust the workflow repo reference (cors-gmbh/dev) and inputs to your project.
+# =============================================================================
+
+name: "\uD83D\uDE80 CI/CD"
+
+permissions:
+  contents: read
+  packages: write
+
+on:
+  push:
+    branches: [staging, master]
+  pull_request:
+    branches: [staging, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  TAG: ${{ github.ref_name }}-${{ github.sha }}
+
+jobs:
+  # ---- 1. Test ----
+  test:
+    uses: cors-gmbh/shared-workflows/.github/workflows/php-test.yaml@main
+    with:
+      php-version: "8.3"
+      pimcore: true
+      ecs: true
+      phpstan: true
+      psalm: false
+      lint-twig: true
+      lint-twig-paths: "templates themes"
+      lint-yaml: true
+      lint-container: true
+      helm: true
+      helm-chart-path: "helm"
+      helm-values-files: "values.yaml,values-staging.yaml"
+    secrets:
+      composer_auth: ${{ secrets.COMPOSER_AUTH }}
+
+  # ---- 2. Build (only on push to staging/master) ----
+  build:
+    needs: test
+    if: github.event_name == 'push'
+    uses: cors-gmbh/shared-workflows/.github/workflows/containerize.yaml@main
+    with:
+      container-tag: ${{ github.ref_name }}-${{ github.sha }}
+      app-env: ${{ github.ref_name == 'master' && 'prod' || 'staging' }}
+      push-latest: true
+      branch-name: ${{ github.ref_name }}
+      registry: ghcr
+      php-version: "8.3"
+      nginx-version: "1.25"
+      alpine-version: "3.19"
+      # Optional: include Varnish
+      # varnish: true
+    secrets:
+      composer_auth: ${{ secrets.COMPOSER_AUTH }}
+
+  # ---- 3. Update Manifest (GitOps) ----
+  manifest:
+    needs: build
+    uses: cors-gmbh/shared-workflows/.github/workflows/update-manifest.yaml@main
+    with:
+      container-tag: ${{ github.ref_name }}-${{ github.sha }}
+      strategy: yq
+      cd-repo: my-project-manifest
+      cd-repo-branch: ${{ github.ref_name }}
+      yq-expressions: |
+        .pimcore.image.tag = "$TAG"
+        .nginx.image.tag = "$TAG"
+        .supervisord.image.tag = "$TAG"
+        .pimcore.cli.image.tag = "$TAG"
+    secrets:
+      cd_push_token: ${{ secrets.CD_PUSH_TOKEN }}
+
+
+# =============================================================================
+# Alternative: GitOps strategy (like Austrian Standards Pimcore X)
+# =============================================================================
+# Replace the manifest job above with this if you use ArgoCD ApplicationSets:
+#
+#   manifest:
+#     needs: build
+#     uses: cors-gmbh/shared-workflows/.github/workflows/update-manifest.yaml@main
+#     with:
+#       container-tag: ${{ github.ref_name }}-${{ github.sha }}
+#       strategy: gitops
+#       cd-repo: cp-apps
+#       helm-chart-path: helm
+#       gitops-environments: |
+#         [
+#           {
+#             "name": "test",
+#             "namespace": "test-pimcore",
+#             "values": "values.yaml,values-test.yaml",
+#             "dir": "nonprod/test-pimcore/test",
+#             "release": "pimcore-test"
+#           },
+#           {
+#             "name": "dev",
+#             "namespace": "dev-pimcore",
+#             "values": "values.yaml,values-develop.yaml",
+#             "dir": "nonprod/dev-pimcore/develop",
+#             "release": "pimcore-dev"
+#           }
+#         ]
+#     secrets:
+#       gh_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}

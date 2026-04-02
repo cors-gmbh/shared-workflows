@@ -1,0 +1,270 @@
+name: "\u2699\uFE0F Update Manifest"
+
+# Replaces the GitLab `update_manifest` stage.
+# Checks out a CD/GitOps repository, updates image tags in a Helm values file, and pushes.
+#
+# Supports two strategies:
+#   strategy=yq      — uses yq to patch specific keys in the values file (GitLab-style, for repos like limas-manifest)
+#   strategy=gitops   — uses helm template to render full manifests into a directory (AS Pimcore-style, for ArgoCD ApplicationSets)
+
+on:
+  workflow_call:
+    inputs:
+      container-tag:
+        description: "The image tag to set (e.g. develop-abcd1234)"
+        required: true
+        type: string
+      strategy:
+        description: "Manifest update strategy: yq or gitops"
+        required: false
+        type: string
+        default: "yq"
+      # --- CD repository ---
+      cd-repo:
+        description: "CD/GitOps repository name (within same org, e.g. my-manifest)"
+        required: true
+        type: string
+      cd-repo-branch:
+        description: "Branch in CD repo to update"
+        required: false
+        type: string
+        default: "main"
+      # --- strategy=yq ---
+      values-file:
+        description: "Values file to update (for strategy=yq, e.g. values-staging.yaml)"
+        required: false
+        type: string
+        default: ""
+      yq-expressions:
+        description: |
+          Newline-separated yq expressions, e.g.:
+            .pimcore.image.tag = "$TAG"
+            .nginx.image.tag = "$TAG"
+          $TAG will be replaced with container-tag.
+        required: false
+        type: string
+        default: |
+          .pimcore.image.tag = "$TAG"
+          .nginx.image.tag = "$TAG"
+          .supervisord.image.tag = "$TAG"
+          .pimcore.cli.image.tag = "$TAG"
+      varnish:
+        description: "Also update varnish image tag (strategy=yq)"
+        required: false
+        type: boolean
+        default: false
+      # --- strategy=gitops ---
+      helm-chart-path:
+        description: "Path to Helm chart in source repo (for strategy=gitops)"
+        required: false
+        type: string
+        default: "helm"
+      gitops-environments:
+        description: |
+          JSON array of environments to render, e.g.:
+          [{"name":"test","namespace":"test-pimcore","values":"values.yaml,values-test.yaml","dir":"nonprod/test-pimcore/test"}]
+        required: false
+        type: string
+        default: "[]"
+      gitops-helm-set:
+        description: "Additional --set flags for helm template (applied to all environments)"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      cd_push_token:
+        description: "Token to push to CD repo (PAT or GitHub App token)"
+        required: false
+      gh_app_private_key:
+        description: "GitHub App private key (alternative to cd_push_token)"
+        required: false
+
+jobs:
+  # ========================================
+  # Strategy: yq (simple values file update)
+  # ========================================
+  update-yq:
+    name: "Update values via yq"
+    if: inputs.strategy == 'yq'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create GitHub App Token
+        if: secrets.gh_app_private_key != ''
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.gh_app_private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.cd-repo }}
+
+      - name: Determine push token
+        id: token
+        run: |
+          if [ -n "${{ steps.app-token.outputs.token || '' }}" ]; then
+            echo "value=${{ steps.app-token.outputs.token }}" >> $GITHUB_OUTPUT
+          else
+            echo "value=${{ secrets.cd_push_token }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout CD Repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/${{ inputs.cd-repo }}
+          ref: ${{ inputs.cd-repo-branch }}
+          token: ${{ steps.token.outputs.value }}
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Update image tags
+        run: |
+          TAG="${{ inputs.container-tag }}"
+          FILE="${{ inputs.values-file }}"
+
+          if [ -z "$FILE" ]; then
+            # Auto-detect: values-<branch>.yaml
+            BRANCH="${{ inputs.cd-repo-branch }}"
+            FILE="values-${BRANCH}.yaml"
+          fi
+
+          echo "Updating $FILE with tag $TAG"
+
+          while IFS= read -r expr; do
+            expr=$(echo "$expr" | xargs)  # trim
+            [ -z "$expr" ] && continue
+            resolved=$(echo "$expr" | sed "s/\$TAG/$TAG/g")
+            echo "  yq: $resolved"
+            yq -i eval "$resolved" "$FILE"
+          done <<< "${{ inputs.yq-expressions }}"
+
+          if [ "${{ inputs.varnish }}" = "true" ]; then
+            echo "  yq: .pimcore.varnish.image.tag = \"$TAG\""
+            yq -i eval ".pimcore.varnish.image.tag = \"$TAG\"" "$FILE"
+          fi
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            --author="${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>" \
+            -m "chore: update image tag to ${{ inputs.container-tag }}"
+          git push origin ${{ inputs.cd-repo-branch }}
+
+  # ====================================================
+  # Strategy: gitops (helm template → rendered manifests)
+  # ====================================================
+  update-gitops:
+    name: "Update manifests via helm template"
+    if: inputs.strategy == 'gitops'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create GitHub App Token
+        if: secrets.gh_app_private_key != ''
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.gh_app_private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.cd-repo }}
+
+      - name: Determine push token
+        id: token
+        run: |
+          if [ -n "${{ steps.app-token.outputs.token || '' }}" ]; then
+            echo "value=${{ steps.app-token.outputs.token }}" >> $GITHUB_OUTPUT
+          else
+            echo "value=${{ secrets.cd_push_token }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout Source Repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: source
+
+      - name: Checkout GitOps Repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/${{ inputs.cd-repo }}
+          ref: ${{ inputs.cd-repo-branch }}
+          token: ${{ steps.token.outputs.value }}
+          path: infra
+          persist-credentials: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Update Helm dependencies
+        working-directory: source/${{ inputs.helm-chart-path }}
+        run: helm dependency update
+
+      - name: Render manifests for all environments
+        run: |
+          REGISTRY="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          TAG="${{ inputs.container-tag }}"
+
+          echo '${{ inputs.gitops-environments }}' | jq -c '.[]' | while read -r env; do
+            name=$(echo "$env" | jq -r '.name')
+            namespace=$(echo "$env" | jq -r '.namespace')
+            values=$(echo "$env" | jq -r '.values')
+            dir=$(echo "$env" | jq -r '.dir')
+            release=$(echo "$env" | jq -r '.release // ("pimcore-" + .name)')
+            extra_set=$(echo "$env" | jq -r '.helm_set // ""')
+
+            echo "::group::Rendering $name (namespace=$namespace)"
+
+            mkdir -p "./infra/${dir}"
+            touch "./infra/${dir}/config-kustomize.yaml"
+
+            VALUES_FLAGS=""
+            IFS=',' read -ra vfiles <<< "$values"
+            for vf in "${vfiles[@]}"; do
+              vf=$(echo "$vf" | xargs)
+              VALUES_FLAGS="${VALUES_FLAGS} --values source/${{ inputs.helm-chart-path }}/${vf}"
+            done
+
+            helm template "${release}" "source/${{ inputs.helm-chart-path }}" \
+              --namespace="${namespace}" \
+              ${VALUES_FLAGS} \
+              --set "pimcore.image.tag=${TAG}" \
+              --set "nginx.image.tag=${TAG}" \
+              --set "supervisord.image.tag=${TAG}" \
+              --set "pimcore.cli.image.tag=${TAG}" \
+              ${{ inputs.gitops-helm-set }} \
+              ${extra_set} \
+              > "./infra/${dir}/manifests.yaml"
+
+            echo "::endgroup::"
+          done
+
+      - name: Commit and push
+        working-directory: infra
+        run: |
+          git remote set-url origin "https://x-access-token:${{ steps.token.outputs.value }}@github.com/${{ github.repository_owner }}/${{ inputs.cd-repo }}.git"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            --author="${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>" \
+            -m "chore: deploy ${{ inputs.container-tag }}"
+          git push origin HEAD:${{ inputs.cd-repo-branch }}

@@ -1,0 +1,235 @@
+name: "\u2699\uFE0F Containerize"
+
+on:
+  workflow_call:
+    inputs:
+      container-tag:
+        description: "Docker image tag (e.g. develop-abcd1234)"
+        required: true
+        type: string
+      app-env:
+        description: "APP_ENV for the build (staging, prod, pr)"
+        required: false
+        type: string
+        default: "staging"
+      push-latest:
+        description: "Also push :branch-latest tags"
+        required: false
+        type: boolean
+        default: false
+      branch-name:
+        description: "Branch name for latest tag (e.g. develop, main)"
+        required: false
+        type: string
+        default: ""
+      # --- Registry ---
+      registry:
+        description: "Container registry type: ghcr or gcp"
+        required: false
+        type: string
+        default: "ghcr"
+      gcp-registry-url:
+        description: "GCP Artifact Registry URL (only for registry=gcp)"
+        required: false
+        type: string
+        default: "europe-west3-docker.pkg.dev"
+      gcp-registry-path:
+        description: "GCP registry path after URL (e.g. cors-wolke/cors/docker)"
+        required: false
+        type: string
+        default: ""
+      # --- Build targets ---
+      targets:
+        description: 'JSON array of build targets, e.g. [{"target":"cors_php","image":"php-alpine-fpm"},...]'
+        required: false
+        type: string
+        default: >-
+          [
+            {"target":"cors_php","image":"php-alpine-fpm"},
+            {"target":"cors_php_blackfire","image":"php-alpine-fpm-blackfire"},
+            {"target":"cors_php_supervisord","image":"php-alpine-supervisord"},
+            {"target":"cors_php_cli","image":"php-alpine-cli"},
+            {"target":"cors_nginx","image":"nginx"}
+          ]
+      varnish:
+        description: "Also build Varnish target"
+        required: false
+        type: boolean
+        default: false
+      # --- Build args ---
+      dockerfile:
+        description: "Dockerfile path"
+        required: false
+        type: string
+        default: "Dockerfile"
+      docker-base-version:
+        description: "DOCKER_BASE_VERSION build arg"
+        required: false
+        type: string
+        default: ""
+      php-version:
+        description: "PHP_VERSION build arg"
+        required: false
+        type: string
+        default: ""
+      nginx-version:
+        description: "NGINX_VERSION build arg"
+        required: false
+        type: string
+        default: ""
+      alpine-version:
+        description: "ALPINE_VERSION build arg"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      composer_auth:
+        description: "Composer auth JSON for private packages"
+        required: false
+      gcp_credentials:
+        description: "GCP service account key (base64, for registry=gcp)"
+        required: false
+      npm_github_pat:
+        description: "GitHub PAT for npm packages"
+        required: false
+    outputs:
+      image-tag:
+        description: "The container image tag that was pushed"
+        value: ${{ jobs.build.outputs.image-tag }}
+
+jobs:
+  build:
+    name: "Build & Push"
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ inputs.container-tag }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.targets) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # --- GHCR Login ---
+      - name: Log in to GHCR
+        if: inputs.registry == 'ghcr'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- GCP Login ---
+      - name: Log in to GCP Artifact Registry
+        if: inputs.registry == 'gcp'
+        run: |
+          echo "${{ secrets.gcp_credentials }}" | base64 -d | \
+            docker login -u _json_key --password-stdin https://${{ inputs.gcp-registry-url }}
+
+      # --- Determine registry prefix ---
+      - name: Set registry prefix
+        id: registry
+        run: |
+          if [ "${{ inputs.registry }}" = "ghcr" ]; then
+            OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+            echo "prefix=ghcr.io/${OWNER}" >> $GITHUB_OUTPUT
+          else
+            REPO_PATH=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+            echo "prefix=${{ inputs.gcp-registry-url }}/${{ inputs.gcp-registry-path || format('cors-wolke/{0}', REPO_PATH) }}" >> $GITHUB_OUTPUT
+          fi
+
+      # --- Build & Push ---
+      - name: Build and Push ${{ matrix.image }}
+        run: |
+          REGISTRY="${{ steps.registry.outputs.prefix }}"
+          IMAGE="${REGISTRY}/${{ matrix.image }}"
+          TAG="${{ inputs.container-tag }}"
+
+          TAGS="--tag ${IMAGE}:${TAG}"
+          if [ "${{ inputs.push-latest }}" = "true" ] && [ -n "${{ inputs.branch-name }}" ]; then
+            TAGS="${TAGS} --tag ${IMAGE}:${{ inputs.branch-name }}-latest"
+          fi
+
+          BUILD_ARGS=""
+          [ -n "${{ inputs.docker-base-version }}" ] && BUILD_ARGS="${BUILD_ARGS} --build-arg DOCKER_BASE_VERSION=${{ inputs.docker-base-version }}"
+          [ -n "${{ inputs.php-version }}" ]          && BUILD_ARGS="${BUILD_ARGS} --build-arg PHP_VERSION=${{ inputs.php-version }}"
+          [ -n "${{ inputs.nginx-version }}" ]         && BUILD_ARGS="${BUILD_ARGS} --build-arg NGINX_VERSION=${{ inputs.nginx-version }}"
+          [ -n "${{ inputs.alpine-version }}" ]        && BUILD_ARGS="${BUILD_ARGS} --build-arg ALPINE_VERSION=${{ inputs.alpine-version }}"
+          [ -n "${{ secrets.composer_auth }}" ]         && BUILD_ARGS="${BUILD_ARGS} --build-arg COMPOSER_AUTH='${{ secrets.composer_auth }}'"
+          [ -n "${{ secrets.npm_github_pat }}" ]        && BUILD_ARGS="${BUILD_ARGS} --build-arg NPM_GITHUB_PAT='${{ secrets.npm_github_pat }}'"
+
+          BUILD_ARGS="${BUILD_ARGS} --build-arg APP_ENV=${{ inputs.app-env }}"
+
+          docker buildx build . \
+            --file ${{ inputs.dockerfile }} \
+            --target ${{ matrix.target }} \
+            ${TAGS} \
+            ${BUILD_ARGS} \
+            --cache-from type=gha,scope=${{ matrix.target }} \
+            --cache-to type=gha,mode=max,scope=${{ matrix.target }} \
+            --push
+
+  # --- Optional Varnish build ---
+  build-varnish:
+    name: "Build & Push Varnish"
+    if: inputs.varnish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: inputs.registry == 'ghcr'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to GCP Artifact Registry
+        if: inputs.registry == 'gcp'
+        run: |
+          echo "${{ secrets.gcp_credentials }}" | base64 -d | \
+            docker login -u _json_key --password-stdin https://${{ inputs.gcp-registry-url }}
+
+      - name: Set registry prefix
+        id: registry
+        run: |
+          if [ "${{ inputs.registry }}" = "ghcr" ]; then
+            OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+            echo "prefix=ghcr.io/${OWNER}" >> $GITHUB_OUTPUT
+          else
+            REPO_PATH=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+            echo "prefix=${{ inputs.gcp-registry-url }}/${{ inputs.gcp-registry-path || format('cors-wolke/{0}', REPO_PATH) }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and Push Varnish
+        run: |
+          REGISTRY="${{ steps.registry.outputs.prefix }}"
+          IMAGE="${REGISTRY}/varnish"
+          TAG="${{ inputs.container-tag }}"
+
+          TAGS="--tag ${IMAGE}:${TAG}"
+          if [ "${{ inputs.push-latest }}" = "true" ] && [ -n "${{ inputs.branch-name }}" ]; then
+            TAGS="${TAGS} --tag ${IMAGE}:${{ inputs.branch-name }}-latest"
+          fi
+
+          docker buildx build . \
+            --file ${{ inputs.dockerfile }} \
+            --target cors_varnish \
+            ${TAGS} \
+            --build-arg DOCKER_BASE_VERSION=${{ inputs.docker-base-version }} \
+            --build-arg APP_ENV=${{ inputs.app-env }} \
+            --cache-from type=gha,scope=varnish \
+            --cache-to type=gha,mode=max,scope=varnish \
+            --push

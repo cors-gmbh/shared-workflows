@@ -1,0 +1,54 @@
+# =============================================================================
+# Example: Pimcore BUNDLE CI
+# =============================================================================
+# Place this as .github/workflows/ci.yaml in your Pimcore bundle repo.
+# This replaces the old GitLab .bundle-gitlab-ci.yml include.
+#
+# Bundles only need the test workflow — no build/manifest steps.
+# =============================================================================
+
+name: "\uD83D\uDE80 CI"
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: cors-gmbh/shared-workflows/.github/workflows/php-test.yaml@main
+    with:
+      php-version: "8.4"
+      pimcore: false          # Bundles typically don't need pimcore:build:classes
+      ecs: true
+      phpstan: false           # Override per bundle as needed
+      psalm: true
+      lint-twig: true
+      lint-twig-paths: "templates"
+      lint-yaml: true
+      lint-yaml-paths: "config"
+      lint-container: true
+    secrets:
+      composer_auth: ${{ secrets.COMPOSER_AUTH }}
+
+
+# =============================================================================
+# Example: Non-Pimcore bundle (pure Symfony)
+# =============================================================================
+# jobs:
+#   test:
+#     uses: cors-gmbh/shared-workflows/.github/workflows/php-test.yaml@main
+#     with:
+#       php-version: "8.4"
+#       pimcore: false
+#       ecs: true
+#       phpstan: true
+#       psalm: false
+#       lint-twig: false
+#       lint-yaml: true
+#       lint-container: false

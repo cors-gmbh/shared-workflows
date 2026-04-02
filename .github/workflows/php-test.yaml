@@ -1,0 +1,215 @@
+name: "\u2699\uFE0F PHP Test"
+
+on:
+  workflow_call:
+    inputs:
+      php-version:
+        description: "PHP version (e.g. 8.3, 8.4)"
+        required: false
+        type: string
+        default: "8.4"
+      docker-base-version:
+        description: "cors/dev base image version"
+        required: false
+        type: string
+        default: ""
+      alpine-version:
+        description: "Alpine version for the test image"
+        required: false
+        type: string
+        default: ""
+      test-image:
+        description: "Full test image override (ignores php/alpine/base version if set)"
+        required: false
+        type: string
+        default: ""
+      # --- Pimcore-specific ---
+      pimcore:
+        description: "Enable Pimcore-specific steps (build:classes, cache warmup)"
+        required: false
+        type: boolean
+        default: true
+      # --- Which checks to run ---
+      ecs:
+        description: "Run ECS (Easy Coding Standard)"
+        required: false
+        type: boolean
+        default: true
+      ecs-paths:
+        description: "Paths for ECS (space-separated)"
+        required: false
+        type: string
+        default: "src"
+      phpstan:
+        description: "Run PHPStan"
+        required: false
+        type: boolean
+        default: false
+      phpstan-config:
+        description: "PHPStan config file (empty = default)"
+        required: false
+        type: string
+        default: ""
+      psalm:
+        description: "Run Psalm"
+        required: false
+        type: boolean
+        default: false
+      psalm-paths:
+        description: "Paths for Psalm"
+        required: false
+        type: string
+        default: "src"
+      lint-twig:
+        description: "Run Twig linting"
+        required: false
+        type: boolean
+        default: true
+      lint-twig-paths:
+        description: "Paths for Twig linting (space-separated)"
+        required: false
+        type: string
+        default: "templates"
+      lint-yaml:
+        description: "Run YAML linting"
+        required: false
+        type: boolean
+        default: true
+      lint-yaml-paths:
+        description: "Paths for YAML linting (space-separated)"
+        required: false
+        type: string
+        default: "config"
+      lint-container:
+        description: "Run Symfony container linting"
+        required: false
+        type: boolean
+        default: true
+      # --- Helm ---
+      helm:
+        description: "Run Helm lint + template validation"
+        required: false
+        type: boolean
+        default: false
+      helm-chart-path:
+        description: "Path to Helm chart"
+        required: false
+        type: string
+        default: "helm"
+      helm-values-files:
+        description: "Comma-separated list of values files to validate (e.g. values.yaml,values-production.yaml)"
+        required: false
+        type: string
+        default: "values.yaml"
+    secrets:
+      composer_auth:
+        description: "Composer auth JSON for private packages"
+        required: false
+
+env:
+  COMPOSER_AUTH: ${{ secrets.composer_auth }}
+
+jobs:
+  lint:
+    name: "Lint & Static Analysis"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          extensions: ctype, iconv, pdo_mysql, intl, zip, gd, mbstring, dom, xml
+          coverage: none
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.composer-cache.outputs.dir }}
+            vendor
+          key: ${{ runner.os }}-php${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-php${{ inputs.php-version }}-
+
+      - name: Composer install
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Build Pimcore classes
+        if: inputs.pimcore
+        run: PIMCORE_DISABLE_CACHE=1 bin/console pimcore:build:classes --env=dev
+        env:
+          APP_ENV: dev
+
+      - name: Warm up cache
+        if: inputs.pimcore
+        run: PIMCORE_DISABLE_CACHE=1 APP_DEBUG=1 bin/console cache:clear --env=dev
+        env:
+          APP_ENV: dev
+
+      - name: ECS
+        if: inputs.ecs
+        run: vendor/bin/ecs check ${{ inputs.ecs-paths }}
+
+      - name: Lint Twig
+        if: inputs.lint-twig
+        run: |
+          for path in ${{ inputs.lint-twig-paths }}; do
+            if [ -d "$path" ]; then
+              bin/console lint:twig "$path"
+            fi
+          done
+
+      - name: Lint YAML
+        if: inputs.lint-yaml
+        run: bin/console lint:yaml ${{ inputs.lint-yaml-paths }} --no-debug
+
+      - name: Lint Container
+        if: inputs.lint-container
+        run: bin/console lint:container
+
+      - name: PHPStan
+        if: inputs.phpstan
+        run: |
+          if [ -n "${{ inputs.phpstan-config }}" ]; then
+            vendor/bin/phpstan analyse -c ${{ inputs.phpstan-config }}
+          else
+            vendor/bin/phpstan analyse
+          fi
+
+      - name: Psalm
+        if: inputs.psalm
+        run: vendor/bin/psalm ${{ inputs.psalm-paths }}
+
+  helm:
+    name: "Helm Lint"
+    if: inputs.helm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Helm Lint
+        run: helm lint ./${{ inputs.helm-chart-path }}
+
+      - name: Update Helm dependencies
+        run: helm dependency update ./${{ inputs.helm-chart-path }}
+
+      - name: Template validation
+        run: |
+          IFS=',' read -ra FILES <<< "${{ inputs.helm-values-files }}"
+          for file in "${FILES[@]}"; do
+            file=$(echo "$file" | xargs)  # trim whitespace
+            echo "::group::Validating $file"
+            helm template test-release ./${{ inputs.helm-chart-path }} \
+              -f ./${{ inputs.helm-chart-path }}/$file > /dev/null
+            echo "::endgroup::"
+          done

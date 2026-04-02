@@ -1,0 +1,67 @@
+# =============================================================================
+# Example: Pimcore PROJECT CI/CD with GCP Artifact Registry
+# =============================================================================
+# For projects that still use GCP instead of GHCR (migration period).
+# =============================================================================
+
+name: "\uD83D\uDE80 CI/CD"
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [staging, master]
+  pull_request:
+    branches: [staging, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: cors-gmbh/shared-workflows/.github/workflows/php-test.yaml@main
+    with:
+      php-version: "8.3"
+      pimcore: true
+      ecs: true
+      phpstan: true
+      lint-twig: true
+      lint-yaml: true
+      lint-container: true
+    secrets:
+      composer_auth: ${{ secrets.COMPOSER_AUTH }}
+
+  build:
+    needs: test
+    if: github.event_name == 'push'
+    uses: cors-gmbh/shared-workflows/.github/workflows/containerize.yaml@main
+    with:
+      container-tag: ${{ github.ref_name }}-${{ github.sha }}
+      app-env: ${{ github.ref_name == 'master' && 'prod' || 'staging' }}
+      push-latest: true
+      branch-name: ${{ github.ref_name }}
+      # --- GCP specific ---
+      registry: gcp
+      gcp-registry-url: "europe-west3-docker.pkg.dev"
+      gcp-registry-path: "cors-wolke/cors/docker"
+      # --- Build args ---
+      docker-base-version: "7.2.3"
+      php-version: "8.3"
+      nginx-version: "1.25"
+      alpine-version: "3.19"
+    secrets:
+      composer_auth: ${{ secrets.COMPOSER_AUTH }}
+      gcp_credentials: ${{ secrets.GOOGLE_ARTIFACT_REGISTRY }}
+
+  manifest:
+    needs: build
+    uses: cors-gmbh/shared-workflows/.github/workflows/update-manifest.yaml@main
+    with:
+      container-tag: ${{ github.ref_name }}-${{ github.sha }}
+      strategy: yq
+      cd-repo: my-project-manifest
+      cd-repo-branch: ${{ github.ref_name }}
+    secrets:
+      cd_push_token: ${{ secrets.CD_PUSH_TOKEN }}
