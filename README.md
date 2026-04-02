@@ -90,7 +90,6 @@ jobs:
 | `ALPINE_VERSION` | `alpine-version` | — |
 | `APP_ENV` | `app-env` | `staging` |
 | `PROD_BRANCH` / `STAGING_BRANCH` | Use `github.ref_name` in caller | — |
-| `VARNISH` | `varnish` | `false` |
 | `TEST_PHPSTAN` | `phpstan` | `false` |
 | `TEST_PSALM` | `psalm` | `false` |
 | `TEST_LINT_TWIG` | `lint-twig` | `true` |

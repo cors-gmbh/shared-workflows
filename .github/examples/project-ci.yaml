@@ -60,8 +60,6 @@ jobs:
       php-version: "8.3"
       nginx-version: "1.25"
       alpine-version: "3.19"
-      # Optional: include Varnish
-      # varnish: true
     secrets:
       composer_auth: ${{ secrets.COMPOSER_AUTH }}
 

@@ -1,0 +1,67 @@
+name: "⚙️ Publish OCI Compose"
+
+# Publishes a Docker Compose file (+ bundled configs) as an OCI artifact to GHCR.
+# Consuming projects can include it via:
+#   include:
+#     - oci://ghcr.io/cors-gmbh/<repo>:<tag>
+
+on:
+  workflow_call:
+    inputs:
+      compose-file:
+        description: "Path to the compose file to publish"
+        required: false
+        type: string
+        default: "compose.yaml"
+      tag:
+        description: "OCI artifact tag (e.g. 1.0.0, latest)"
+        required: true
+        type: string
+      also-tag-latest:
+        description: "Also push :latest tag"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  publish:
+    name: "Publish OCI"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine image name
+        id: image
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          IMAGE="ghcr.io/$(echo "$REPO" | tr '[:upper:]' '[:lower:]')"
+          echo "name=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish OCI artifact
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          TAG: ${{ inputs.tag }}
+          COMPOSE_FILE: ${{ inputs.compose-file }}
+          ALSO_LATEST: ${{ inputs.also-tag-latest }}
+        run: |
+          echo "Publishing ${IMAGE}:${TAG}"
+          docker compose -f "$COMPOSE_FILE" publish "${IMAGE}:${TAG}"
+
+          if [ "$ALSO_LATEST" = "true" ]; then
+            echo "Publishing ${IMAGE}:latest"
+            docker compose -f "$COMPOSE_FILE" publish "${IMAGE}:latest"
+          fi

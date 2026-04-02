@@ -1,4 +1,4 @@
-name: "\u2699\uFE0F Containerize"
+name: "⚙️ Containerize"
 
 on:
   workflow_call:
@@ -51,11 +51,6 @@ on:
             {"target":"cors_php_cli","image":"php-alpine-cli"},
             {"target":"cors_nginx","image":"nginx"}
           ]
-      varnish:
-        description: "Also build Varnish target"
-        required: false
-        type: boolean
-        default: false
       # --- Build args ---
       dockerfile:
         description: "Dockerfile path"
@@ -101,6 +96,10 @@ jobs:
   build:
     name: "Build & Push"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
     outputs:
       image-tag: ${{ inputs.container-tag }}
 
@@ -128,108 +127,101 @@ jobs:
       # --- GCP Login ---
       - name: Log in to GCP Artifact Registry
         if: inputs.registry == 'gcp'
+        env:
+          GCP_CREDENTIALS: ${{ secrets.gcp_credentials }}
+          GCP_REGISTRY_URL: ${{ inputs.gcp-registry-url }}
         run: |
-          echo "${{ secrets.gcp_credentials }}" | base64 -d | \
-            docker login -u _json_key --password-stdin https://${{ inputs.gcp-registry-url }}
+          echo "$GCP_CREDENTIALS" | base64 -d | \
+            docker login -u _json_key --password-stdin "https://${GCP_REGISTRY_URL}"
 
       # --- Determine registry prefix ---
       - name: Set registry prefix
         id: registry
+        env:
+          REGISTRY_TYPE: ${{ inputs.registry }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.repository }}
+          GCP_REGISTRY_URL: ${{ inputs.gcp-registry-url }}
+          GCP_REGISTRY_PATH: ${{ inputs.gcp-registry-path }}
         run: |
-          if [ "${{ inputs.registry }}" = "ghcr" ]; then
-            OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-            echo "prefix=ghcr.io/${OWNER}" >> $GITHUB_OUTPUT
+          if [ "$REGISTRY_TYPE" = "ghcr" ]; then
+            OWNER=$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
+            echo "prefix=ghcr.io/${OWNER}" >> "$GITHUB_OUTPUT"
           else
-            REPO_PATH=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-            echo "prefix=${{ inputs.gcp-registry-url }}/${{ inputs.gcp-registry-path || format('cors-wolke/{0}', REPO_PATH) }}" >> $GITHUB_OUTPUT
+            REPO_PATH=$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')
+            echo "prefix=${GCP_REGISTRY_URL}/${GCP_REGISTRY_PATH:-cors-wolke/${REPO_PATH}}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --- Prepare tags ---
+      - name: Prepare tags
+        id: tags
+        env:
+          REGISTRY_PREFIX: ${{ steps.registry.outputs.prefix }}
+          IMAGE_NAME: ${{ matrix.image }}
+          CONTAINER_TAG: ${{ inputs.container-tag }}
+          PUSH_LATEST: ${{ inputs.push-latest }}
+          BRANCH_NAME: ${{ inputs.branch-name }}
+        run: |
+          IMAGE="${REGISTRY_PREFIX}/${IMAGE_NAME}"
+          {
+            echo "tags<<EOF"
+            echo "${IMAGE}:${CONTAINER_TAG}"
+            if [ "$PUSH_LATEST" = "true" ] && [ -n "$BRANCH_NAME" ]; then
+              echo "${IMAGE}:${BRANCH_NAME}-latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # --- Prepare build args ---
+      - name: Prepare build args
+        id: build-args
+        env:
+          APP_ENV: ${{ inputs.app-env }}
+          DOCKER_BASE_VERSION: ${{ inputs.docker-base-version }}
+          PHP_VERSION: ${{ inputs.php-version }}
+          NGINX_VERSION: ${{ inputs.nginx-version }}
+          ALPINE_VERSION: ${{ inputs.alpine-version }}
+          COMPOSER_AUTH: ${{ secrets.composer_auth }}
+          NPM_GITHUB_PAT: ${{ secrets.npm_github_pat }}
+        run: |
+          {
+            echo "args<<EOF"
+            echo "APP_ENV=${APP_ENV}"
+            [ -n "$DOCKER_BASE_VERSION" ] && echo "DOCKER_BASE_VERSION=${DOCKER_BASE_VERSION}"
+            [ -n "$PHP_VERSION" ]          && echo "PHP_VERSION=${PHP_VERSION}"
+            [ -n "$NGINX_VERSION" ]         && echo "NGINX_VERSION=${NGINX_VERSION}"
+            [ -n "$ALPINE_VERSION" ]        && echo "ALPINE_VERSION=${ALPINE_VERSION}"
+            [ -n "$COMPOSER_AUTH" ]          && echo "COMPOSER_AUTH=${COMPOSER_AUTH}"
+            [ -n "$NPM_GITHUB_PAT" ]        && echo "NPM_GITHUB_PAT=${NPM_GITHUB_PAT}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # --- Determine cache backend ---
+      - name: Determine cache backend
+        id: cache
+        env:
+          REGISTRY_TYPE: ${{ inputs.registry }}
+          REGISTRY_PREFIX: ${{ steps.registry.outputs.prefix }}
+          IMAGE_NAME: ${{ matrix.image }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          if [ "$REGISTRY_TYPE" = "gcp" ]; then
+            echo "from=type=registry,ref=${REGISTRY_PREFIX}/${IMAGE_NAME}:buildcache-${TARGET}" >> "$GITHUB_OUTPUT"
+            echo "to=type=registry,ref=${REGISTRY_PREFIX}/${IMAGE_NAME}:buildcache-${TARGET},mode=max" >> "$GITHUB_OUTPUT"
+          else
+            echo "from=type=gha,scope=${TARGET}" >> "$GITHUB_OUTPUT"
+            echo "to=type=gha,mode=max,scope=${TARGET}" >> "$GITHUB_OUTPUT"
           fi
 
       # --- Build & Push ---
       - name: Build and Push ${{ matrix.image }}
-        run: |
-          REGISTRY="${{ steps.registry.outputs.prefix }}"
-          IMAGE="${REGISTRY}/${{ matrix.image }}"
-          TAG="${{ inputs.container-tag }}"
-
-          TAGS="--tag ${IMAGE}:${TAG}"
-          if [ "${{ inputs.push-latest }}" = "true" ] && [ -n "${{ inputs.branch-name }}" ]; then
-            TAGS="${TAGS} --tag ${IMAGE}:${{ inputs.branch-name }}-latest"
-          fi
-
-          BUILD_ARGS=""
-          [ -n "${{ inputs.docker-base-version }}" ] && BUILD_ARGS="${BUILD_ARGS} --build-arg DOCKER_BASE_VERSION=${{ inputs.docker-base-version }}"
-          [ -n "${{ inputs.php-version }}" ]          && BUILD_ARGS="${BUILD_ARGS} --build-arg PHP_VERSION=${{ inputs.php-version }}"
-          [ -n "${{ inputs.nginx-version }}" ]         && BUILD_ARGS="${BUILD_ARGS} --build-arg NGINX_VERSION=${{ inputs.nginx-version }}"
-          [ -n "${{ inputs.alpine-version }}" ]        && BUILD_ARGS="${BUILD_ARGS} --build-arg ALPINE_VERSION=${{ inputs.alpine-version }}"
-          [ -n "${{ secrets.composer_auth }}" ]         && BUILD_ARGS="${BUILD_ARGS} --build-arg COMPOSER_AUTH='${{ secrets.composer_auth }}'"
-          [ -n "${{ secrets.npm_github_pat }}" ]        && BUILD_ARGS="${BUILD_ARGS} --build-arg NPM_GITHUB_PAT='${{ secrets.npm_github_pat }}'"
-
-          BUILD_ARGS="${BUILD_ARGS} --build-arg APP_ENV=${{ inputs.app-env }}"
-
-          docker buildx build . \
-            --file ${{ inputs.dockerfile }} \
-            --target ${{ matrix.target }} \
-            ${TAGS} \
-            ${BUILD_ARGS} \
-            --cache-from type=gha,scope=${{ matrix.target }} \
-            --cache-to type=gha,mode=max,scope=${{ matrix.target }} \
-            --push
-
-  # --- Optional Varnish build ---
-  build-varnish:
-    name: "Build & Push Varnish"
-    if: inputs.varnish
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        if: inputs.registry == 'ghcr'
-        uses: docker/login-action@v3
+        uses: docker/build-push-action@v6
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Log in to GCP Artifact Registry
-        if: inputs.registry == 'gcp'
-        run: |
-          echo "${{ secrets.gcp_credentials }}" | base64 -d | \
-            docker login -u _json_key --password-stdin https://${{ inputs.gcp-registry-url }}
-
-      - name: Set registry prefix
-        id: registry
-        run: |
-          if [ "${{ inputs.registry }}" = "ghcr" ]; then
-            OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-            echo "prefix=ghcr.io/${OWNER}" >> $GITHUB_OUTPUT
-          else
-            REPO_PATH=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-            echo "prefix=${{ inputs.gcp-registry-url }}/${{ inputs.gcp-registry-path || format('cors-wolke/{0}', REPO_PATH) }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Build and Push Varnish
-        run: |
-          REGISTRY="${{ steps.registry.outputs.prefix }}"
-          IMAGE="${REGISTRY}/varnish"
-          TAG="${{ inputs.container-tag }}"
-
-          TAGS="--tag ${IMAGE}:${TAG}"
-          if [ "${{ inputs.push-latest }}" = "true" ] && [ -n "${{ inputs.branch-name }}" ]; then
-            TAGS="${TAGS} --tag ${IMAGE}:${{ inputs.branch-name }}-latest"
-          fi
-
-          docker buildx build . \
-            --file ${{ inputs.dockerfile }} \
-            --target cors_varnish \
-            ${TAGS} \
-            --build-arg DOCKER_BASE_VERSION=${{ inputs.docker-base-version }} \
-            --build-arg APP_ENV=${{ inputs.app-env }} \
-            --cache-from type=gha,scope=varnish \
-            --cache-to type=gha,mode=max,scope=varnish \
-            --push
+          context: .
+          file: ${{ inputs.dockerfile }}
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: ${{ steps.build-args.outputs.args }}
+          cache-from: ${{ steps.cache.outputs.from }}
+          cache-to: ${{ steps.cache.outputs.to }}

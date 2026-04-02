@@ -1,4 +1,4 @@
-name: "\u2699\uFE0F PHP Test"
+name: "⚙️ PHP Test"
 
 on:
   workflow_call:
@@ -8,21 +8,6 @@ on:
         required: false
         type: string
         default: "8.4"
-      docker-base-version:
-        description: "cors/dev base image version"
-        required: false
-        type: string
-        default: ""
-      alpine-version:
-        description: "Alpine version for the test image"
-        required: false
-        type: string
-        default: ""
-      test-image:
-        description: "Full test image override (ignores php/alpine/base version if set)"
-        required: false
-        type: string
-        default: ""
       # --- Pimcore-specific ---
       pimcore:
         description: "Enable Pimcore-specific steps (build:classes, cache warmup)"
@@ -110,9 +95,15 @@ env:
   COMPOSER_AUTH: ${{ secrets.composer_auth }}
 
 jobs:
+  # ===========================================================================
+  # ECS + Symfony Linting (Twig, YAML, Container)
+  # ===========================================================================
   lint:
-    name: "Lint & Static Analysis"
+    name: "Lint"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -126,7 +117,7 @@ jobs:
 
       - name: Get composer cache directory
         id: composer-cache
-        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
 
       - name: Cache composer dependencies
         uses: actions/cache@v4
@@ -154,12 +145,16 @@ jobs:
 
       - name: ECS
         if: inputs.ecs
-        run: vendor/bin/ecs check ${{ inputs.ecs-paths }}
+        env:
+          ECS_PATHS: ${{ inputs.ecs-paths }}
+        run: vendor/bin/ecs check $ECS_PATHS
 
       - name: Lint Twig
         if: inputs.lint-twig
+        env:
+          TWIG_PATHS: ${{ inputs.lint-twig-paths }}
         run: |
-          for path in ${{ inputs.lint-twig-paths }}; do
+          for path in $TWIG_PATHS; do
             if [ -d "$path" ]; then
               bin/console lint:twig "$path"
             fi
@@ -167,29 +162,130 @@ jobs:
 
       - name: Lint YAML
         if: inputs.lint-yaml
-        run: bin/console lint:yaml ${{ inputs.lint-yaml-paths }} --no-debug
+        env:
+          YAML_PATHS: ${{ inputs.lint-yaml-paths }}
+        run: bin/console lint:yaml $YAML_PATHS --no-debug
 
       - name: Lint Container
         if: inputs.lint-container
         run: bin/console lint:container
 
+  # ===========================================================================
+  # PHPStan (separate job — runs in parallel with lint)
+  # ===========================================================================
+  phpstan:
+    name: "PHPStan"
+    if: inputs.phpstan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          extensions: ctype, iconv, pdo_mysql, intl, zip, gd, mbstring, dom, xml
+          coverage: none
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.composer-cache.outputs.dir }}
+            vendor
+          key: ${{ runner.os }}-php${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-php${{ inputs.php-version }}-
+
+      - name: Composer install
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Build Pimcore classes
+        if: inputs.pimcore
+        run: PIMCORE_DISABLE_CACHE=1 bin/console pimcore:build:classes --env=dev
+        env:
+          APP_ENV: dev
+
+      - name: Warm up cache
+        run: bin/console cache:warmup --env=dev
+        env:
+          APP_ENV: dev
+
       - name: PHPStan
-        if: inputs.phpstan
+        env:
+          PHPSTAN_CONFIG: ${{ inputs.phpstan-config }}
         run: |
-          if [ -n "${{ inputs.phpstan-config }}" ]; then
-            vendor/bin/phpstan analyse -c ${{ inputs.phpstan-config }}
+          if [ -n "$PHPSTAN_CONFIG" ]; then
+            vendor/bin/phpstan analyse -c "$PHPSTAN_CONFIG"
           else
             vendor/bin/phpstan analyse
           fi
 
-      - name: Psalm
-        if: inputs.psalm
-        run: vendor/bin/psalm ${{ inputs.psalm-paths }}
+  # ===========================================================================
+  # Psalm (separate job — runs in parallel with lint)
+  # ===========================================================================
+  psalm:
+    name: "Psalm"
+    if: inputs.psalm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          extensions: ctype, iconv, pdo_mysql, intl, zip, gd, mbstring, dom, xml
+          coverage: none
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.composer-cache.outputs.dir }}
+            vendor
+          key: ${{ runner.os }}-php${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-php${{ inputs.php-version }}-
+
+      - name: Composer install
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Build Pimcore classes
+        if: inputs.pimcore
+        run: PIMCORE_DISABLE_CACHE=1 bin/console pimcore:build:classes --env=dev
+        env:
+          APP_ENV: dev
+
+      - name: Psalm
+        env:
+          PSALM_PATHS: ${{ inputs.psalm-paths }}
+        run: vendor/bin/psalm $PSALM_PATHS
+
+  # ===========================================================================
+  # Helm (separate job — runs in parallel, no PHP needed)
+  # ===========================================================================
   helm:
-    name: "Helm Lint"
+    name: "Helm"
     if: inputs.helm
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -204,12 +300,42 @@ jobs:
         run: helm dependency update ./${{ inputs.helm-chart-path }}
 
       - name: Template validation
+        env:
+          HELM_VALUES_FILES: ${{ inputs.helm-values-files }}
+          HELM_CHART_PATH: ${{ inputs.helm-chart-path }}
         run: |
-          IFS=',' read -ra FILES <<< "${{ inputs.helm-values-files }}"
+          IFS=',' read -ra FILES <<< "$HELM_VALUES_FILES"
           for file in "${FILES[@]}"; do
-            file=$(echo "$file" | xargs)  # trim whitespace
+            file=$(echo "$file" | xargs)
             echo "::group::Validating $file"
-            helm template test-release ./${{ inputs.helm-chart-path }} \
-              -f ./${{ inputs.helm-chart-path }}/$file > /dev/null
+            helm template test-release "./${HELM_CHART_PATH}" \
+              -f "./${HELM_CHART_PATH}/${file}" > /dev/null
             echo "::endgroup::"
           done
+
+  # ===========================================================================
+  # Gate job — ensures the workflow is never fully skipped
+  # ===========================================================================
+  complete:
+    name: "Tests Complete"
+    if: always()
+    needs: [lint, phpstan, psalm, helm]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check status
+        env:
+          LINT_RESULT: ${{ needs.lint.result }}
+          PHPSTAN_RESULT: ${{ needs.phpstan.result }}
+          PSALM_RESULT: ${{ needs.psalm.result }}
+          HELM_RESULT: ${{ needs.helm.result }}
+        run: |
+          for result in "$LINT_RESULT" "$PHPSTAN_RESULT" "$PSALM_RESULT" "$HELM_RESULT"; do
+            if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
+              echo "Job failed or was cancelled: $result"
+              exit 1
+            fi
+          done
+          echo "All tests passed or were skipped"
