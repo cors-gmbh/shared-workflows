@@ -45,6 +45,7 @@ jobs:
     secrets:
       everhour_token: ${{ secrets.EVERHOUR_TOKEN }}
       slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+      repo_github_token: ${{ secrets.GH_PAT }}
 
   # Manual: either internal or customer report
   manual:
@@ -58,3 +59,4 @@ jobs:
     secrets:
       everhour_token: ${{ secrets.EVERHOUR_TOKEN }}
       slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+      repo_github_token: ${{ secrets.GH_PAT }}
