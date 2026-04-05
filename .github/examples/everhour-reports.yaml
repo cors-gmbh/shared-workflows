@@ -1,0 +1,60 @@
+# Example: Monthly Everhour reports (internal + customer-facing)
+# Copy this to your project's .github/workflows/ and adjust inputs.
+#
+# Provides two manual triggers:
+#   - "Internal Report"  → Buchungsbericht (hours per employee per epic, budget status)
+#   - "Customer Report"  → Stundennachweis (task descriptions, no employee names)
+#
+# Both run automatically on the 1st of each month for the previous month.
+# Typical run time: ~30 seconds (well under the 5-minute timeout).
+
+name: Everhour Reports
+
+on:
+  schedule:
+    # 1st of each month, 08:00 UTC — internal report
+    - cron: "0 8 1 * *"
+
+  workflow_dispatch:
+    inputs:
+      report-type:
+        description: "Report type"
+        required: true
+        type: choice
+        options:
+          - internal
+          - customer
+        default: "internal"
+      customer:
+        description: "Customer name (only for 'customer' type)"
+        required: false
+        default: ""
+      month:
+        description: "Report month YYYY-MM (empty = previous month)"
+        required: false
+        default: ""
+
+jobs:
+  # Scheduled: internal report on the 1st of each month
+  scheduled-internal:
+    if: github.event_name == 'schedule'
+    uses: cors-gmbh/shared-workflows/.github/workflows/everhour-report.yaml@main
+    with:
+      report-type: "internal"
+      project-id: "ev:YOUR_PROJECT_ID"     # ← Replace with your Everhour project ID
+    secrets:
+      everhour_token: ${{ secrets.EVERHOUR_TOKEN }}
+      slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Manual: either internal or customer report
+  manual:
+    if: github.event_name == 'workflow_dispatch'
+    uses: cors-gmbh/shared-workflows/.github/workflows/everhour-report.yaml@main
+    with:
+      report-type: ${{ inputs.report-type }}
+      customer: ${{ inputs.customer }}
+      month: ${{ inputs.month }}
+      project-id: "ev:YOUR_PROJECT_ID"     # ← Replace with your Everhour project ID
+    secrets:
+      everhour_token: ${{ secrets.EVERHOUR_TOKEN }}
+      slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}

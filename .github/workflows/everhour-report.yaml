@@ -1,0 +1,144 @@
+name: "📊 Everhour Report"
+
+on:
+  workflow_call:
+    inputs:
+      report-type:
+        description: "Report type: 'internal' (Buchungsbericht) or 'customer' (Stundennachweis)"
+        required: true
+        type: string
+      customer:
+        description: "Customer name (required for 'customer' type, e.g. 'Rutar Group')"
+        required: false
+        type: string
+        default: ""
+      month:
+        description: "Report month YYYY-MM (empty = previous month)"
+        required: false
+        type: string
+        default: ""
+      project-id:
+        description: "Everhour project ID (e.g. 'ev:195337863425313')"
+        required: true
+        type: string
+      logo-path:
+        description: "Path to CORS logo SVG in the calling repo"
+        required: false
+        type: string
+        default: "scripts/assets/cors-logo.svg"
+      artifact-retention-days:
+        description: "Number of days to keep the PDF artifact"
+        required: false
+        type: number
+        default: 90
+    secrets:
+      everhour_token:
+        description: "Everhour API token"
+        required: true
+      slack_webhook_url:
+        description: "Slack Incoming Webhook URL for notifications"
+        required: false
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: "📥 Checkout calling repo"
+        uses: actions/checkout@v4
+
+      - name: "📥 Checkout shared scripts"
+        uses: actions/checkout@v4
+        with:
+          repository: cors-gmbh/shared-workflows
+          path: .shared
+          sparse-checkout: scripts/everhour
+
+      - name: "🐍 Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: "📦 Install dependencies"
+        run: pip install reportlab cairosvg
+
+      - name: "🎨 Convert CORS logo"
+        run: |
+          python3 -c "
+          import cairosvg, os, sys
+          logo_svg = '${{ inputs.logo-path }}'
+          if not os.path.exists(logo_svg):
+            print(f'Logo not found at {logo_svg}, trying shared path...')
+            logo_svg = '.shared/scripts/everhour/assets/cors-logo.svg'
+          if not os.path.exists(logo_svg):
+            print('WARNING: No logo found, generating without logo')
+            sys.exit(0)
+          cairosvg.svg2png(url=logo_svg, write_to='/tmp/cors_logo.png', output_width=800, background_color='white')
+          print(f'Logo converted from {logo_svg}')
+          "
+
+      - name: "📄 Generate internal report (Buchungsbericht)"
+        if: inputs.report-type == 'internal'
+        env:
+          EVERHOUR_TOKEN: ${{ secrets.everhour_token }}
+        run: |
+          MONTH_ARG=""
+          if [ -n "${{ inputs.month }}" ]; then
+            MONTH_ARG="--month ${{ inputs.month }}"
+          fi
+          python3 .shared/scripts/everhour/generate_buchungsbericht.py \
+            --everhour-token "$EVERHOUR_TOKEN" \
+            --project-id "${{ inputs.project-id }}" \
+            --output ./reports \
+            --logo /tmp/cors_logo.png \
+            $MONTH_ARG
+
+      - name: "📄 Generate customer report (Stundennachweis)"
+        if: inputs.report-type == 'customer'
+        env:
+          EVERHOUR_TOKEN: ${{ secrets.everhour_token }}
+        run: |
+          CUSTOMER="${{ inputs.customer }}"
+          if [ -z "$CUSTOMER" ]; then
+            echo "::error::Customer name is required for 'customer' report type"
+            exit 1
+          fi
+          MONTH_ARG=""
+          if [ -n "${{ inputs.month }}" ]; then
+            MONTH_ARG="--month ${{ inputs.month }}"
+          fi
+          python3 .shared/scripts/everhour/generate_stundennachweis.py \
+            --everhour-token "$EVERHOUR_TOKEN" \
+            --project-id "${{ inputs.project-id }}" \
+            --customer "$CUSTOMER" \
+            --output ./reports \
+            --logo /tmp/cors_logo.png \
+            $MONTH_ARG
+
+      - name: "📤 Upload PDF artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.report-type == 'internal' && 'buchungsbericht' || 'stundennachweis' }}
+          path: reports/*.pdf
+          retention-days: ${{ inputs.artifact-retention-days }}
+
+      - name: "💬 Notify Slack"
+        if: success() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.slack_webhook_url }}
+        run: |
+          PDF_FILE=$(ls reports/*.pdf | head -1)
+          PDF_NAME=$(basename "$PDF_FILE")
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TYPE_LABEL=${{ inputs.report-type == 'internal' && 'Buchungsbericht' || 'Stundennachweis' }}
+          CUSTOMER_LINE=""
+          if [ -n "${{ inputs.customer }}" ]; then
+            CUSTOMER_LINE="\n• Kunde: ${{ inputs.customer }}"
+          fi
+
+          curl -sf -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"text\": \":page_facing_up: *${TYPE_LABEL} generiert*${CUSTOMER_LINE}\n\u2022 Datei: \`${PDF_NAME}\`\n\u2022 <${RUN_URL}|Download im Actions-Tab>\"
+            }" || echo "::warning::Slack notification failed"
