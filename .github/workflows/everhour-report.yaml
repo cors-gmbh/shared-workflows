@@ -38,6 +38,9 @@ on:
       slack_webhook_url:
         description: "Slack Incoming Webhook URL for notifications"
         required: false
+      github_token:
+        description: "PAT with repo scope for cross-repo checkout of shared scripts"
+        required: false
 
 jobs:
   generate-report:
@@ -54,6 +57,7 @@ jobs:
           repository: cors-gmbh/shared-workflows
           path: .shared
           sparse-checkout: scripts/everhour
+          token: ${{ secrets.github_token || github.token }}
 
       - name: "🐍 Set up Python"
         uses: actions/setup-python@v5
