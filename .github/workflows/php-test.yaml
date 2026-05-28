@@ -148,7 +148,7 @@ jobs:
         if: inputs.lint-yaml
         env:
           YAML_PATHS: ${{ inputs.lint-yaml-paths }}
-        run: bin/console lint:yaml $YAML_PATHS --no-debug
+        run: bin/console lint:yaml $YAML_PATHS --parse-tags --no-debug
 
       - name: Lint Container
         if: inputs.lint-container
