@@ -136,7 +136,8 @@ jobs:
           echo "Updating $FILE with tag $TAG"
 
           while IFS= read -r expr; do
-            expr=$(echo "$expr" | xargs)  # trim
+            # trim leading/trailing whitespace (do NOT use xargs: it strips quotes)
+            expr=$(printf '%s' "$expr" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
             [ -z "$expr" ] && continue
             resolved=$(echo "$expr" | sed "s/\$TAG/$TAG/g")
             echo "  yq: $resolved"
