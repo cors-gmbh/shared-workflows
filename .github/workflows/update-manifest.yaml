@@ -110,7 +110,7 @@ jobs:
           fi
 
       - name: Checkout CD Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ github.repository_owner }}/${{ inputs.cd-repo }}
           ref: ${{ inputs.cd-repo-branch }}
@@ -187,13 +187,13 @@ jobs:
           fi
 
       - name: Checkout Source Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
           path: source
 
       - name: Checkout GitOps Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ github.repository_owner }}/${{ inputs.cd-repo }}
           ref: ${{ inputs.cd-repo-branch }}
