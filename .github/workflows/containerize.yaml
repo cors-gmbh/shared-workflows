@@ -78,7 +78,7 @@ on:
         type: string
         default: ""
       nginx-version:
-        description: "NGINX_VERSION build arg"
+        description: "NGINX_VERSION build arg. Fallback when .env has no DOCKER_NGINX_VERSION (most .env files don't carry nginx)."
         required: false
         type: string
         default: ""
@@ -191,21 +191,25 @@ jobs:
           IN_PHP: ${{ inputs.php-version }}
           IN_ALPINE: ${{ inputs.alpine-version }}
           IN_BASE: ${{ inputs.docker-base-version }}
+          IN_NGINX: ${{ inputs.nginx-version }}
         run: |
           # .env is authoritative when versions-from-env is on; inputs are the
-          # fallback for keys absent from .env (e.g. a repo without that var).
-          php="$IN_PHP"; alpine="$IN_ALPINE"; base="$IN_BASE"
+          # fallback for keys absent from .env (e.g. nginx, which most .env files
+          # don't carry — then the explicit nginx-version input is used).
+          php="$IN_PHP"; alpine="$IN_ALPINE"; base="$IN_BASE"; nginx="$IN_NGINX"
           if [ "$FROM_ENV" = "true" ] && [ -f "$ENV_FILE" ]; then
             get() { sed -nE "s/^[[:space:]]*$1=[\"']?([^\"'#[:space:]]+).*/\1/p" "$ENV_FILE" | head -1; }
             ev=$(get DOCKER_PHP_VERSION);   [ -n "$ev" ] && php="$ev"
             ev=$(get DOCKER_ALPINE_VERSION); [ -n "$ev" ] && alpine="$ev"
             ev=$(get DOCKER_BASE_IMAGE);     [ -n "$ev" ] && base="$ev"
-            echo "Resolved from ${ENV_FILE}: php=${php} alpine=${alpine} base=${base}"
+            ev=$(get DOCKER_NGINX_VERSION);  [ -n "$ev" ] && nginx="$ev"
+            echo "Resolved from ${ENV_FILE}: php=${php} alpine=${alpine} base=${base} nginx=${nginx}"
           fi
           {
             echo "php=${php}"
             echo "alpine=${alpine}"
             echo "base=${base}"
+            echo "nginx=${nginx}"
           } >> "$GITHUB_OUTPUT"
 
       # --- Prepare build args ---
@@ -215,7 +219,7 @@ jobs:
           APP_ENV: ${{ inputs.app-env }}
           DOCKER_BASE_VERSION: ${{ steps.versions.outputs.base }}
           PHP_VERSION: ${{ steps.versions.outputs.php }}
-          NGINX_VERSION: ${{ inputs.nginx-version }}
+          NGINX_VERSION: ${{ steps.versions.outputs.nginx }}
           ALPINE_VERSION: ${{ steps.versions.outputs.alpine }}
           NPM_GITHUB_PAT: ${{ secrets.npm_github_pat }}
         run: |
