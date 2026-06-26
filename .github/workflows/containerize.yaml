@@ -57,8 +57,18 @@ on:
         required: false
         type: string
         default: "Dockerfile"
+      versions-from-env:
+        description: "Read image versions (PHP/Alpine/Base) from the repo's .env (single source of truth, same as dev-compose). Explicit inputs below override .env."
+        required: false
+        type: boolean
+        default: false
+      env-file:
+        description: "Path to the .env file to read versions from (when versions-from-env is true)"
+        required: false
+        type: string
+        default: ".env"
       docker-base-version:
-        description: "DOCKER_BASE_VERSION build arg"
+        description: "DOCKER_BASE_VERSION build arg (overrides .env DOCKER_BASE_IMAGE)"
         required: false
         type: string
         default: ""
@@ -172,15 +182,41 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # --- Resolve image versions (explicit inputs win, else read from .env) ---
+      - name: Resolve image versions
+        id: versions
+        env:
+          FROM_ENV: ${{ inputs.versions-from-env }}
+          ENV_FILE: ${{ inputs.env-file }}
+          IN_PHP: ${{ inputs.php-version }}
+          IN_ALPINE: ${{ inputs.alpine-version }}
+          IN_BASE: ${{ inputs.docker-base-version }}
+        run: |
+          # .env is authoritative when versions-from-env is on; inputs are the
+          # fallback for keys absent from .env (e.g. a repo without that var).
+          php="$IN_PHP"; alpine="$IN_ALPINE"; base="$IN_BASE"
+          if [ "$FROM_ENV" = "true" ] && [ -f "$ENV_FILE" ]; then
+            get() { sed -nE "s/^[[:space:]]*$1=[\"']?([^\"'#[:space:]]+).*/\1/p" "$ENV_FILE" | head -1; }
+            ev=$(get DOCKER_PHP_VERSION);   [ -n "$ev" ] && php="$ev"
+            ev=$(get DOCKER_ALPINE_VERSION); [ -n "$ev" ] && alpine="$ev"
+            ev=$(get DOCKER_BASE_IMAGE);     [ -n "$ev" ] && base="$ev"
+            echo "Resolved from ${ENV_FILE}: php=${php} alpine=${alpine} base=${base}"
+          fi
+          {
+            echo "php=${php}"
+            echo "alpine=${alpine}"
+            echo "base=${base}"
+          } >> "$GITHUB_OUTPUT"
+
       # --- Prepare build args ---
       - name: Prepare build args
         id: build-args
         env:
           APP_ENV: ${{ inputs.app-env }}
-          DOCKER_BASE_VERSION: ${{ inputs.docker-base-version }}
-          PHP_VERSION: ${{ inputs.php-version }}
+          DOCKER_BASE_VERSION: ${{ steps.versions.outputs.base }}
+          PHP_VERSION: ${{ steps.versions.outputs.php }}
           NGINX_VERSION: ${{ inputs.nginx-version }}
-          ALPINE_VERSION: ${{ inputs.alpine-version }}
+          ALPINE_VERSION: ${{ steps.versions.outputs.alpine }}
           NPM_GITHUB_PAT: ${{ secrets.npm_github_pat }}
         run: |
           {

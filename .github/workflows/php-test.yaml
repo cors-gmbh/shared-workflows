@@ -4,10 +4,20 @@ on:
   workflow_call:
     inputs:
       php-version:
-        description: "PHP version (e.g. 8.3, 8.4)"
+        description: "PHP version (e.g. 8.3, 8.4). Used as fallback when versions-from-env is on but .env has no DOCKER_PHP_VERSION."
         required: false
         type: string
         default: "8.4"
+      versions-from-env:
+        description: "Read PHP version from the repo's .env (DOCKER_PHP_VERSION) — single source of truth, same as dev-compose."
+        required: false
+        type: boolean
+        default: false
+      env-file:
+        description: "Path to the .env file to read the PHP version from (when versions-from-env is true)"
+        required: false
+        type: string
+        default: ".env"
       # --- Pimcore-specific ---
       pimcore:
         description: "Enable Pimcore-specific steps (build:classes, cache warmup)"
@@ -80,10 +90,40 @@ env:
 
 jobs:
   # ===========================================================================
+  # Resolve PHP version (from .env when versions-from-env is on, else input)
+  # ===========================================================================
+  resolve-versions:
+    name: "Resolve versions"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      php-version: ${{ steps.v.outputs.php }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve PHP version
+        id: v
+        env:
+          FROM_ENV: ${{ inputs.versions-from-env }}
+          ENV_FILE: ${{ inputs.env-file }}
+          IN_PHP: ${{ inputs.php-version }}
+        run: |
+          # .env authoritative when versions-from-env is on; input is the fallback.
+          php="$IN_PHP"
+          if [ "$FROM_ENV" = "true" ] && [ -f "$ENV_FILE" ]; then
+            ev=$(sed -nE "s/^[[:space:]]*DOCKER_PHP_VERSION=[\"']?([^\"'#[:space:]]+).*/\1/p" "$ENV_FILE" | head -1)
+            [ -n "$ev" ] && php="$ev"
+            echo "Resolved from ${ENV_FILE}: php=${php}"
+          fi
+          echo "php=${php}" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
   # ECS + Symfony Linting (Twig, YAML, Container)
   # ===========================================================================
   lint:
     name: "Lint"
+    needs: resolve-versions
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -95,7 +135,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: ${{ inputs.php-version }}
+          php-version: ${{ needs.resolve-versions.outputs.php-version }}
           extensions: ctype, iconv, pdo_mysql, intl, zip, gd, mbstring, dom, xml
           coverage: none
 
@@ -109,8 +149,8 @@ jobs:
           path: |
             ${{ steps.composer-cache.outputs.dir }}
             vendor
-          key: ${{ runner.os }}-php${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
-          restore-keys: ${{ runner.os }}-php${{ inputs.php-version }}-
+          key: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-
 
       - name: Composer install
         run: composer install --no-interaction --prefer-dist
@@ -160,6 +200,7 @@ jobs:
   phpstan:
     name: "PHPStan"
     if: inputs.phpstan
+    needs: resolve-versions
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -171,7 +212,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: ${{ inputs.php-version }}
+          php-version: ${{ needs.resolve-versions.outputs.php-version }}
           extensions: ctype, iconv, pdo_mysql, intl, zip, gd, mbstring, dom, xml
           coverage: none
 
@@ -185,8 +226,8 @@ jobs:
           path: |
             ${{ steps.composer-cache.outputs.dir }}
             vendor
-          key: ${{ runner.os }}-php${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
-          restore-keys: ${{ runner.os }}-php${{ inputs.php-version }}-
+          key: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-
 
       - name: Composer install
         run: composer install --no-interaction --prefer-dist
@@ -218,6 +259,7 @@ jobs:
   psalm:
     name: "Psalm"
     if: inputs.psalm
+    needs: resolve-versions
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -229,7 +271,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: ${{ inputs.php-version }}
+          php-version: ${{ needs.resolve-versions.outputs.php-version }}
           extensions: ctype, iconv, pdo_mysql, intl, zip, gd, mbstring, dom, xml
           coverage: none
 
@@ -243,8 +285,8 @@ jobs:
           path: |
             ${{ steps.composer-cache.outputs.dir }}
             vendor
-          key: ${{ runner.os }}-php${{ inputs.php-version }}-${{ hashFiles('**/composer.lock') }}
-          restore-keys: ${{ runner.os }}-php${{ inputs.php-version }}-
+          key: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-
 
       - name: Composer install
         run: composer install --no-interaction --prefer-dist
