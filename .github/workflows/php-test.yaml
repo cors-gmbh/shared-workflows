@@ -88,8 +88,8 @@ on:
         description: "Additional Composer auth JSON, merged per-host with composer_auth (e.g. repo.pimcore.com or a repo-specific token)"
         required: false
 
-env:
-  COMPOSER_AUTH: ${{ secrets.composer_auth }}
+# COMPOSER_AUTH is composed per-job from composer_auth + composer_auth_extra
+# (see "Setup composer auth" steps) so a repo-specific token overrides the base.
 
 jobs:
   # ===========================================================================
@@ -155,16 +155,17 @@ jobs:
           key: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-${{ hashFiles('**/composer.lock') }}
           restore-keys: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-
 
-      - name: Add extra composer auth
+      - name: Setup composer auth
         env:
+          BASE: ${{ secrets.composer_auth }}
           EXTRA: ${{ secrets.composer_auth_extra }}
         run: |
-          # Composer merges this project auth.json with the COMPOSER_AUTH env
-          # (base auth) host-by-host, so disjoint hosts coexist.
-          if [ -n "$EXTRA" ]; then
-            printf '%s' "$EXTRA" > auth.json
-            echo "Wrote extra composer auth to project auth.json"
-          fi
+          # Deep-merge base + extra (extra wins on host conflicts) into a single
+          # COMPOSER_AUTH for all following steps. One authoritative source — no
+          # ambiguity between env and auth.json file precedence.
+          merged=$(jq -cn --argjson a "${BASE:-{\}}" --argjson b "${EXTRA:-{\}}" '$a * $b')
+          echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
+          echo "Composed COMPOSER_AUTH from $(jq -rn --argjson a "${BASE:-{\}}" '($a["http-basic"]//{}|keys|length)') base + $(jq -rn --argjson b "${EXTRA:-{\}}" '($b["http-basic"]//{}|keys|length)') extra host(s)"
 
       - name: Composer install
         run: composer install --no-interaction --prefer-dist
@@ -243,16 +244,17 @@ jobs:
           key: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-${{ hashFiles('**/composer.lock') }}
           restore-keys: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-
 
-      - name: Add extra composer auth
+      - name: Setup composer auth
         env:
+          BASE: ${{ secrets.composer_auth }}
           EXTRA: ${{ secrets.composer_auth_extra }}
         run: |
-          # Composer merges this project auth.json with the COMPOSER_AUTH env
-          # (base auth) host-by-host, so disjoint hosts coexist.
-          if [ -n "$EXTRA" ]; then
-            printf '%s' "$EXTRA" > auth.json
-            echo "Wrote extra composer auth to project auth.json"
-          fi
+          # Deep-merge base + extra (extra wins on host conflicts) into a single
+          # COMPOSER_AUTH for all following steps. One authoritative source — no
+          # ambiguity between env and auth.json file precedence.
+          merged=$(jq -cn --argjson a "${BASE:-{\}}" --argjson b "${EXTRA:-{\}}" '$a * $b')
+          echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
+          echo "Composed COMPOSER_AUTH from $(jq -rn --argjson a "${BASE:-{\}}" '($a["http-basic"]//{}|keys|length)') base + $(jq -rn --argjson b "${EXTRA:-{\}}" '($b["http-basic"]//{}|keys|length)') extra host(s)"
 
       - name: Composer install
         run: composer install --no-interaction --prefer-dist
@@ -313,16 +315,17 @@ jobs:
           key: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-${{ hashFiles('**/composer.lock') }}
           restore-keys: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-
 
-      - name: Add extra composer auth
+      - name: Setup composer auth
         env:
+          BASE: ${{ secrets.composer_auth }}
           EXTRA: ${{ secrets.composer_auth_extra }}
         run: |
-          # Composer merges this project auth.json with the COMPOSER_AUTH env
-          # (base auth) host-by-host, so disjoint hosts coexist.
-          if [ -n "$EXTRA" ]; then
-            printf '%s' "$EXTRA" > auth.json
-            echo "Wrote extra composer auth to project auth.json"
-          fi
+          # Deep-merge base + extra (extra wins on host conflicts) into a single
+          # COMPOSER_AUTH for all following steps. One authoritative source — no
+          # ambiguity between env and auth.json file precedence.
+          merged=$(jq -cn --argjson a "${BASE:-{\}}" --argjson b "${EXTRA:-{\}}" '$a * $b')
+          echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
+          echo "Composed COMPOSER_AUTH from $(jq -rn --argjson a "${BASE:-{\}}" '($a["http-basic"]//{}|keys|length)') base + $(jq -rn --argjson b "${EXTRA:-{\}}" '($b["http-basic"]//{}|keys|length)') extra host(s)"
 
       - name: Composer install
         run: composer install --no-interaction --prefer-dist
