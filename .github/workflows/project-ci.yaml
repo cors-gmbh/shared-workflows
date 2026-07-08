@@ -1,0 +1,198 @@
+name: "⚙️ Project CI"
+
+# One-stop CI/CD for a CORS Pimcore project: test → build → update manifest.
+# Projects call this with a thin caller that only carries triggers + project
+# specifics. Build and manifest run only on push, after tests pass, and can be
+# toggled off individually.
+
+on:
+  workflow_call:
+    inputs:
+      # --- Tests (forwarded to php-test.yaml) ---
+      versions-from-env:
+        description: "Read PHP/image versions from the repo's .env (single source of truth)"
+        required: false
+        type: boolean
+        default: true
+      pimcore:
+        required: false
+        type: boolean
+        default: true
+      ecs:
+        required: false
+        type: boolean
+        default: true
+      phpstan:
+        required: false
+        type: boolean
+        default: false
+      psalm:
+        required: false
+        type: boolean
+        default: false
+      lint-twig:
+        required: false
+        type: boolean
+        default: true
+      lint-yaml:
+        required: false
+        type: boolean
+        default: true
+      lint-container:
+        required: false
+        type: boolean
+        default: true
+      # --- Build (forwarded to containerize.yaml) ---
+      build:
+        description: "Build & push a container image on push (after tests)"
+        required: false
+        type: boolean
+        default: true
+      registry:
+        description: "Container registry type: ghcr or gcp"
+        required: false
+        type: string
+        default: "gcp"
+      gcp-registry-url:
+        required: false
+        type: string
+        default: "europe-west3-docker.pkg.dev"
+      gcp-registry-path:
+        description: "GCP registry path after URL (e.g. cors-wolke/cors/<project>)"
+        required: false
+        type: string
+        default: ""
+      dockerfile:
+        required: false
+        type: string
+        default: "Dockerfile"
+      nginx-version:
+        description: "NGINX_VERSION build arg (usually not in .env, so pin it)"
+        required: false
+        type: string
+        default: ""
+      # --- Manifest / CD (forwarded to update-manifest.yaml) ---
+      update-manifest:
+        description: "Bump image tags in the CD/ArgoCD manifest repo after build"
+        required: false
+        type: boolean
+        default: true
+      manifest-strategy:
+        description: "Manifest update strategy: yq or gitops"
+        required: false
+        type: string
+        default: "yq"
+      cd-repo:
+        description: "CD/manifest repository name within the same org (e.g. <project>-manifest)"
+        required: false
+        type: string
+        default: ""
+      yq-expressions:
+        description: "Newline-separated yq expressions ($TAG is replaced with the image tag)"
+        required: false
+        type: string
+        default: |
+          .pimcore.pimcore.image.tag = "$TAG"
+          .pimcore.nginx.image.tag = "$TAG"
+          .pimcore.supervisord.image.tag = "$TAG"
+          .pimcore.pimcore.cli.image.tag = "$TAG"
+    secrets:
+      composer_auth:
+        required: false
+      composer_auth_extra:
+        required: false
+      gcp_credentials:
+        required: false
+      cd_push_token:
+        required: false
+      gh_app_private_key:
+        required: false
+      npm_github_pat:
+        required: false
+
+jobs:
+  # --- Tests / lint / static analysis (push + PR) ---
+  test:
+    uses: ./.github/workflows/php-test.yaml
+    with:
+      versions-from-env: ${{ inputs.versions-from-env }}
+      pimcore: ${{ inputs.pimcore }}
+      ecs: ${{ inputs.ecs }}
+      phpstan: ${{ inputs.phpstan }}
+      psalm: ${{ inputs.psalm }}
+      lint-twig: ${{ inputs.lint-twig }}
+      lint-yaml: ${{ inputs.lint-yaml }}
+      lint-container: ${{ inputs.lint-container }}
+    secrets:
+      composer_auth: ${{ secrets.composer_auth }}
+      composer_auth_extra: ${{ secrets.composer_auth_extra }}
+
+  # --- Resolve image tag (<branch>-<short-sha>) and APP_ENV (push + build only) ---
+  prep:
+    name: "Resolve tag & env"
+    if: github.event_name == 'push' && inputs.build
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.m.outputs.tag }}
+      app-env: ${{ steps.m.outputs.app_env }}
+    steps:
+      - name: Map branch to tag & env
+        id: m
+        env:
+          PROD_BRANCH: ${{ vars.PROD_BRANCH || 'main' }}
+          STAGE_BRANCH: ${{ vars.STAGE_BRANCH || 'staging' }}
+          REF: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          echo "tag=${REF}-${SHA:0:8}" >> "$GITHUB_OUTPUT"
+          if [ "$REF" = "$PROD_BRANCH" ]; then
+            env=prod
+          elif [ "$REF" = "$STAGE_BRANCH" ]; then
+            env=staging
+          else
+            env="$REF"
+          fi
+          echo "app_env=${env}" >> "$GITHUB_OUTPUT"
+
+  # --- Build & push all targets (after tests) ---
+  build:
+    name: "Containerize"
+    needs: prep
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/containerize.yaml
+    with:
+      container-tag: ${{ needs.prep.outputs.tag }}
+      app-env: ${{ needs.prep.outputs.app-env }}
+      push-latest: true
+      branch-name: ${{ github.ref_name }}
+      registry: ${{ inputs.registry }}
+      gcp-registry-url: ${{ inputs.gcp-registry-url }}
+      gcp-registry-path: ${{ inputs.gcp-registry-path }}
+      dockerfile: ${{ inputs.dockerfile }}
+      versions-from-env: ${{ inputs.versions-from-env }}
+      nginx-version: ${{ inputs.nginx-version }}
+    secrets:
+      composer_auth: ${{ secrets.composer_auth }}
+      composer_auth_extra: ${{ secrets.composer_auth_extra }}
+      gcp_credentials: ${{ secrets.gcp_credentials }}
+      npm_github_pat: ${{ secrets.npm_github_pat }}
+
+  # --- Bump image tags in the CD/manifest repo (after build) ---
+  update-manifest:
+    name: "Update manifest"
+    if: inputs.update-manifest
+    needs: [prep, build]
+    uses: ./.github/workflows/update-manifest.yaml
+    with:
+      container-tag: ${{ needs.prep.outputs.tag }}
+      strategy: ${{ inputs.manifest-strategy }}
+      cd-repo: ${{ inputs.cd-repo }}
+      cd-repo-branch: ${{ github.ref_name }}
+      yq-expressions: ${{ inputs.yq-expressions }}
+    secrets:
+      cd_push_token: ${{ secrets.cd_push_token }}
+      gh_app_private_key: ${{ secrets.gh_app_private_key }}
