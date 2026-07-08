@@ -1,0 +1,128 @@
+name: "🎨 Frontend Build"
+
+# Builds a Pimcore Studio frontend (Rsbuild/module-federation), type-checks it,
+# and commits the produced public assets back to the branch.
+# Consuming repos call it via:
+#   uses: cors-gmbh/shared-workflows/.github/workflows/frontend-build.yaml@main
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Node.js version"
+        required: false
+        type: string
+        default: "22"
+      install-command:
+        description: "Command to install dependencies"
+        required: false
+        type: string
+        default: "npm ci --ignore-scripts"
+      rebuild-esbuild:
+        description: "Run 'npm rebuild esbuild' after install (needed when installing with --ignore-scripts)"
+        required: false
+        type: boolean
+        default: true
+      check-types:
+        description: "Run the type-check step before building"
+        required: false
+        type: boolean
+        default: true
+      check-types-command:
+        description: "Command to run type checks"
+        required: false
+        type: string
+        default: "npm run check-types"
+      build-command:
+        description: "Command to produce the production build"
+        required: false
+        type: string
+        default: "npm run build"
+      file-pattern:
+        description: "Glob of built assets to commit back to the branch"
+        required: true
+        type: string
+      commit-message:
+        description: "Commit message for the built assets"
+        required: false
+        type: string
+        default: "Build Studio frontend assets [skip ci]"
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+permissions:
+  contents: read
+
+jobs:
+  check-types:
+    if: ${{ inputs.check-types }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.BRANCH_NAME }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: ${{ inputs.install-command }}
+
+      - name: Run esbuild install script
+        if: ${{ inputs.rebuild-esbuild }}
+        run: npm rebuild esbuild
+
+      - name: Run type checks
+        run: ${{ inputs.check-types-command }}
+
+  build:
+    needs: check-types
+    # run even when check-types is skipped, but not when it failed
+    if: ${{ always() && !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.BRANCH_NAME }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+
+      - name: Cache Rsbuild build cache
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.cache/rsbuild
+          key: rsbuild-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          restore-keys: |
+            rsbuild-${{ hashFiles('package-lock.json') }}-
+
+      - name: Install dependencies
+        run: ${{ inputs.install-command }}
+
+      - name: Run esbuild install script
+        if: ${{ inputs.rebuild-esbuild }}
+        run: npm rebuild esbuild
+
+      - name: Run production build
+        run: ${{ inputs.build-command }}
+
+      - uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          file_pattern: ${{ inputs.file-pattern }}
+          add_options: '-f'
+          skip_dirty_check: true
+          commit_message: ${{ inputs.commit-message }}

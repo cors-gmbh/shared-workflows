@@ -11,6 +11,7 @@ Reusable GitHub Actions workflows for CORS Pimcore projects and bundles.
 | `php-test.yaml` | `test` stage (project + bundle) | ECS, PHPStan, Psalm, Twig/YAML/Container lint, Helm lint |
 | `containerize.yaml` | `build_and_push` stage | Multi-target Docker build, GHCR or GCP registry |
 | `update-manifest.yaml` | `update_manifest` stage | CD repo update via yq or helm template (GitOps) |
+| `frontend-build.yaml` | — | Build Pimcore Studio frontend (Rsbuild), type-check, commit assets |
 
 ## Quick Start
 
@@ -76,6 +77,36 @@ jobs:
       psalm: true
     secrets:
       composer_auth: ${{ secrets.COMPOSER_AUTH }}
+```
+
+### Studio frontend build (`.github/workflows/frontend-build.yaml`)
+
+For bundles that ship a compiled Pimcore Studio frontend. Type-checks, builds
+and commits the produced public assets back to the branch.
+
+```yaml
+name: Studio Frontend Build
+
+on:
+  push:
+    paths:
+      - 'bundles/*/Resources/assets/pimcore-studio/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'studio-build.ts'
+      - 'rsbuild.*.ts'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    uses: cors-gmbh/shared-workflows/.github/workflows/frontend-build.yaml@main
+    with:
+      file-pattern: 'bundles/*/Resources/public/studio/*/**'
+      commit-message: "Build Pimcore Legacy Studio bundles [skip ci]"
 ```
 
 ## Migration from GitLab
