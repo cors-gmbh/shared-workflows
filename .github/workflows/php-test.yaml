@@ -82,7 +82,10 @@ on:
         default: true
     secrets:
       composer_auth:
-        description: "Composer auth JSON for private packages"
+        description: "Composer auth JSON for private packages (base — e.g. org-wide cors.repo.packagist token)"
+        required: false
+      composer_auth_extra:
+        description: "Additional Composer auth JSON, merged per-host with composer_auth (e.g. repo.pimcore.com or a repo-specific token)"
         required: false
 
 env:
@@ -151,6 +154,17 @@ jobs:
             vendor
           key: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-${{ hashFiles('**/composer.lock') }}
           restore-keys: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-
+
+      - name: Add extra composer auth
+        env:
+          EXTRA: ${{ secrets.composer_auth_extra }}
+        run: |
+          # Composer merges this project auth.json with the COMPOSER_AUTH env
+          # (base auth) host-by-host, so disjoint hosts coexist.
+          if [ -n "$EXTRA" ]; then
+            printf '%s' "$EXTRA" > auth.json
+            echo "Wrote extra composer auth to project auth.json"
+          fi
 
       - name: Composer install
         run: composer install --no-interaction --prefer-dist
@@ -229,6 +243,17 @@ jobs:
           key: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-${{ hashFiles('**/composer.lock') }}
           restore-keys: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-
 
+      - name: Add extra composer auth
+        env:
+          EXTRA: ${{ secrets.composer_auth_extra }}
+        run: |
+          # Composer merges this project auth.json with the COMPOSER_AUTH env
+          # (base auth) host-by-host, so disjoint hosts coexist.
+          if [ -n "$EXTRA" ]; then
+            printf '%s' "$EXTRA" > auth.json
+            echo "Wrote extra composer auth to project auth.json"
+          fi
+
       - name: Composer install
         run: composer install --no-interaction --prefer-dist
 
@@ -287,6 +312,17 @@ jobs:
             vendor
           key: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-${{ hashFiles('**/composer.lock') }}
           restore-keys: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-
+
+      - name: Add extra composer auth
+        env:
+          EXTRA: ${{ secrets.composer_auth_extra }}
+        run: |
+          # Composer merges this project auth.json with the COMPOSER_AUTH env
+          # (base auth) host-by-host, so disjoint hosts coexist.
+          if [ -n "$EXTRA" ]; then
+            printf '%s' "$EXTRA" > auth.json
+            echo "Wrote extra composer auth to project auth.json"
+          fi
 
       - name: Composer install
         run: composer install --no-interaction --prefer-dist
