@@ -89,7 +89,10 @@ on:
         default: ""
     secrets:
       composer_auth:
-        description: "Composer auth JSON for private packages"
+        description: "Composer auth JSON for private packages (base — e.g. org-wide cors.repo.packagist token)"
+        required: false
+      composer_auth_extra:
+        description: "Additional Composer auth JSON, merged with composer_auth (extra wins on host conflicts, e.g. repo.pimcore.com)"
         required: false
       gcp_credentials:
         description: "GCP service account key (base64, for registry=gcp)"
@@ -251,6 +254,16 @@ jobs:
             echo "to=type=gha,mode=max,scope=${TARGET}" >> "$GITHUB_OUTPUT"
           fi
 
+      # --- Compose composer auth (base + extra, extra wins on host conflicts) ---
+      - name: Compose composer auth
+        env:
+          BASE: ${{ secrets.composer_auth }}
+          EXTRA: ${{ secrets.composer_auth_extra }}
+        run: |
+          merged=$(jq -cn --argjson a "${BASE:-{\}}" --argjson b "${EXTRA:-{\}}" '$a * $b')
+          echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
+          echo "Composed composer auth from $(jq -rn --argjson a "${BASE:-{\}}" '($a["http-basic"]//{}|keys|length)') base + $(jq -rn --argjson b "${EXTRA:-{\}}" '($b["http-basic"]//{}|keys|length)') extra host(s)"
+
       # --- Build & Push ---
       - name: Build and Push ${{ matrix.image }}
         uses: docker/build-push-action@v7
@@ -262,6 +275,6 @@ jobs:
           tags: ${{ steps.tags.outputs.tags }}
           build-args: ${{ steps.build-args.outputs.args }}
           secrets: |
-            composer_auth=${{ secrets.composer_auth }}
+            composer_auth=${{ env.COMPOSER_AUTH }}
           cache-from: ${{ steps.cache.outputs.from }}
           cache-to: ${{ steps.cache.outputs.to }}
