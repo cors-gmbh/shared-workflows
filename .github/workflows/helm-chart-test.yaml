@@ -1,0 +1,102 @@
+name: "⚙️ Helm Chart Test"
+
+# Reusable workflow: lint a Helm chart and render it (default values + an
+# arbitrary matrix of `--set` scenarios) to catch template errors in CI.
+#
+# Consume via:
+#   jobs:
+#     test:
+#       uses: cors-gmbh/shared-workflows/.github/workflows/helm-chart-test.yaml@main
+#       with:
+#         scenarios: |
+#           --set foo.enabled=true
+#           --set bar.enabled=true --set bar.mode=x
+
+on:
+  workflow_call:
+    inputs:
+      chart-path:
+        description: "Path to the chart directory"
+        required: false
+        type: string
+        default: "."
+      helm-version:
+        description: "Helm version (passed to azure/setup-helm; 'latest' or a pinned version)"
+        required: false
+        type: string
+        default: "latest"
+      release-name:
+        description: "Release name used for `helm template`/`helm lint`"
+        required: false
+        type: string
+        default: "test"
+      lint-strict:
+        description: "Fail on lint warnings (helm lint --strict)"
+        required: false
+        type: boolean
+        default: false
+      scenarios:
+        description: "Newline-separated list of extra `--set` flag sets. Each non-empty line is rendered as its own `helm template` scenario."
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  test:
+    name: "Lint & Template"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ inputs.helm-version }}
+
+      - name: Helm lint
+        env:
+          CHART: ${{ inputs.chart-path }}
+          STRICT: ${{ inputs.lint-strict }}
+        run: |
+          if [ "$STRICT" = "true" ]; then
+            helm lint "$CHART" --strict
+          else
+            helm lint "$CHART"
+          fi
+
+      - name: Render (default values)
+        env:
+          CHART: ${{ inputs.chart-path }}
+          RELEASE: ${{ inputs.release-name }}
+        run: helm template "$RELEASE" "$CHART" > /dev/null
+
+      - name: Render (scenarios)
+        env:
+          CHART: ${{ inputs.chart-path }}
+          RELEASE: ${{ inputs.release-name }}
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          if [ -z "${SCENARIOS//[[:space:]]/}" ]; then
+            echo "No extra scenarios configured."
+            exit 0
+          fi
+          rc=0
+          # Process substitution (not a pipe) so rc survives into the parent shell.
+          while IFS= read -r line; do
+            # skip blank lines
+            [ -z "${line//[[:space:]]/}" ] && continue
+            echo "::group::helm template $RELEASE $CHART $line"
+            # shellcheck disable=SC2086
+            if helm template "$RELEASE" "$CHART" $line > /dev/null; then
+              echo "OK"
+            else
+              echo "::error::Render failed for scenario: $line"
+              rc=1
+            fi
+            echo "::endgroup::"
+          done < <(printf '%s\n' "$SCENARIOS")
+          exit $rc
