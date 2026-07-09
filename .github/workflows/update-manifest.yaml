@@ -73,6 +73,9 @@ on:
       gh_app_private_key:
         description: "GitHub App private key (alternative to cd_push_token)"
         required: false
+      gh_app_id:
+        description: "GitHub App ID as a secret (falls back to vars.GH_APP_ID if unset)"
+        required: false
 
 jobs:
   # ========================================
@@ -92,7 +95,7 @@ jobs:
         continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ vars.GH_APP_ID }}
+          app-id: ${{ secrets.gh_app_id || vars.GH_APP_ID }}
           private-key: ${{ secrets.gh_app_private_key }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ inputs.cd-repo }}
@@ -169,7 +172,7 @@ jobs:
         continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ vars.GH_APP_ID }}
+          app-id: ${{ secrets.gh_app_id || vars.GH_APP_ID }}
           private-key: ${{ secrets.gh_app_private_key }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ inputs.cd-repo }}
