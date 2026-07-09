@@ -1,0 +1,50 @@
+# =============================================================================
+# Example: Helm CHART CI
+# =============================================================================
+# Place this as .github/workflows/chart.yaml in a Helm chart repo.
+# Lints + renders the chart via the reusable workflow, then publishes it as an
+# OCI artifact to GHCR on tags / manual dispatch.
+# =============================================================================
+
+name: "Chart"
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Chart version to publish (e.g. 0.0.0-test.1)"
+        required: true
+
+jobs:
+  test:
+    uses: cors-gmbh/shared-workflows/.github/workflows/helm-chart-test.yaml@main
+    with:
+      scenarios: |
+        --set opensearch.enabled=true --set redis.enabled=true --set rabbitmq.enabled=true
+        --set redis.enabled=true --set redis.mode=sentinel --set redis.password=pw
+        --set sql.proxy.enabled=false --set pimcore.healthz.enabled=true --set nginx.pingProbe.enabled=true --set upload.enabled=true --set upload.port=2222
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Package chart
+        run: helm package . --version "${VERSION}"
+      - name: Push chart
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          helm push pimcore-"${VERSION}".tgz "oci://ghcr.io/${OWNER}/charts"
