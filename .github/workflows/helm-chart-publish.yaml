@@ -1,0 +1,92 @@
+name: "⚙️ Helm Chart Publish"
+
+# Reusable workflow: package a Helm chart and push it as an OCI artifact.
+# Chart name is read from Chart.yaml, so this is chart-agnostic.
+#
+# Consume via:
+#   jobs:
+#     publish:
+#       if: startsWith(github.ref, 'refs/tags/')
+#       uses: cors-gmbh/shared-workflows/.github/workflows/helm-chart-publish.yaml@main
+#       with:
+#         version: ${{ github.ref_name }}
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Chart version to publish (e.g. 1.2.3)"
+        required: true
+        type: string
+      chart-path:
+        description: "Path to the chart directory"
+        required: false
+        type: string
+        default: "."
+      oci-repo:
+        description: "OCI repo WITHOUT the chart name, e.g. ghcr.io/org/charts. Empty -> ghcr.io/<owner>/charts"
+        required: false
+        type: string
+        default: ""
+      helm-version:
+        description: "Helm version (passed to azure/setup-helm)"
+        required: false
+        type: string
+        default: "latest"
+    secrets:
+      registry-username:
+        description: "Registry username (default: github.actor)"
+        required: false
+      registry-password:
+        description: "Registry password/token (default: GITHUB_TOKEN)"
+        required: false
+
+jobs:
+  publish:
+    name: "Publish OCI"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: ${{ inputs.helm-version }}
+
+      - name: Resolve OCI repo and registry host
+        id: target
+        env:
+          OCI_REPO: ${{ inputs.oci-repo }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          repo="$OCI_REPO"
+          if [ -z "$repo" ]; then
+            owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
+            repo="ghcr.io/${owner}/charts"
+          fi
+          registry="${repo%%/*}"
+          echo "repo=${repo}" >> "$GITHUB_OUTPUT"
+          echo "registry=${registry}" >> "$GITHUB_OUTPUT"
+
+      - name: Registry login
+        env:
+          REGISTRY: ${{ steps.target.outputs.registry }}
+          USERNAME: ${{ secrets.registry-username || github.actor }}
+          PASSWORD: ${{ secrets.registry-password || secrets.GITHUB_TOKEN }}
+        run: echo "$PASSWORD" | helm registry login "$REGISTRY" --username "$USERNAME" --password-stdin
+
+      - name: Package and push
+        env:
+          CHART: ${{ inputs.chart-path }}
+          VERSION: ${{ inputs.version }}
+          REPO: ${{ steps.target.outputs.repo }}
+        run: |
+          name="$(helm show chart "$CHART" | awk '/^name:/ {print $2; exit}')"
+          echo "Publishing ${name} ${VERSION} -> oci://${REPO}"
+          helm package "$CHART" --version "$VERSION"
+          helm push "${name}-${VERSION}.tgz" "oci://${REPO}"
