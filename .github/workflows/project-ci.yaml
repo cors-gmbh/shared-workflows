@@ -107,6 +107,8 @@ on:
         required: false
       gh_app_private_key:
         required: false
+      gh_app_id:
+        required: false
       npm_github_pat:
         required: false
 
@@ -196,3 +198,4 @@ jobs:
     secrets:
       cd_push_token: ${{ secrets.cd_push_token }}
       gh_app_private_key: ${{ secrets.gh_app_private_key }}
+      gh_app_id: ${{ secrets.gh_app_id }}
