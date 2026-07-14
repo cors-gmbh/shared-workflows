@@ -35,6 +35,11 @@ on:
         required: false
         type: boolean
         default: false
+      values-file:
+        description: "Values file applied to EVERY render (default + scenarios). For charts whose required values have no sensible default (e.g. the app image), so the bare default render still works."
+        required: false
+        type: string
+        default: ""
       scenarios:
         description: "Newline-separated list of extra `--set` flag sets. Each non-empty line is rendered as its own `helm template` scenario."
         required: false
@@ -72,13 +77,15 @@ jobs:
         env:
           CHART: ${{ inputs.chart-path }}
           RELEASE: ${{ inputs.release-name }}
-        run: helm template "$RELEASE" "$CHART" > /dev/null
+          VALUES: ${{ inputs.values-file }}
+        run: helm template "$RELEASE" "$CHART" ${VALUES:+-f "$VALUES"} > /dev/null
 
       - name: Render (scenarios)
         env:
           CHART: ${{ inputs.chart-path }}
           RELEASE: ${{ inputs.release-name }}
           SCENARIOS: ${{ inputs.scenarios }}
+          VALUES: ${{ inputs.values-file }}
         run: |
           if [ -z "${SCENARIOS//[[:space:]]/}" ]; then
             echo "No extra scenarios configured."
@@ -91,7 +98,7 @@ jobs:
             [ -z "${line//[[:space:]]/}" ] && continue
             echo "::group::helm template $RELEASE $CHART $line"
             # shellcheck disable=SC2086
-            if helm template "$RELEASE" "$CHART" $line > /dev/null; then
+            if helm template "$RELEASE" "$CHART" ${VALUES:+-f "$VALUES"} $line > /dev/null; then
               echo "OK"
             else
               echo "::error::Render failed for scenario: $line"
