@@ -66,11 +66,15 @@ jobs:
         env:
           CHART: ${{ inputs.chart-path }}
           STRICT: ${{ inputs.lint-strict }}
+          VALUES: ${{ inputs.values-file }}
         run: |
+          # values-file has to reach lint as well: it validates values.yaml
+          # against values.schema.json, so a chart with required values (no
+          # default image, say) fails lint without it.
           if [ "$STRICT" = "true" ]; then
-            helm lint "$CHART" --strict
+            helm lint "$CHART" ${VALUES:+-f "$VALUES"} --strict
           else
-            helm lint "$CHART"
+            helm lint "$CHART" ${VALUES:+-f "$VALUES"}
           fi
 
       - name: Render (default values)
