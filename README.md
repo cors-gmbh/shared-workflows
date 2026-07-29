@@ -81,33 +81,64 @@ jobs:
 
 ### Studio frontend build (`.github/workflows/frontend-build.yaml`)
 
-For bundles that ship a compiled Pimcore Studio frontend. Type-checks, builds
-and commits the produced public assets back to the branch.
+For bundles that ship a compiled Pimcore Studio frontend. Type-checks and builds
+the frontend, and commits the produced public assets back to the release branch.
+
+Call it twice: pull requests verify only (`commit: false`), so their diffs stay
+limited to the actual source changes, and the assets are committed once per push
+to the release branch (`commit: true`, the default).
 
 ```yaml
 name: Studio Frontend Build
 
 on:
+  pull_request:
+    branches: [main]
+  # `paths-ignore` keeps the asset commit from triggering another (no-op) build
   push:
-    paths:
-      - 'bundles/*/Resources/assets/pimcore-studio/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'studio-build.ts'
-      - 'rsbuild.*.ts'
+    branches: [main]
+    paths-ignore:
+      - 'src/Resources/public/studio/build/**'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # Gating on `push` rather than on "not a pull request" keeps a manual run on a
+  # feature branch from committing assets to that branch.
+  verify:
+    if: ${{ github.event_name != 'push' }}
+    permissions:
+      contents: read
+    uses: cors-gmbh/shared-workflows/.github/workflows/frontend-build.yaml@main
+    with:
+      commit: false
+      file-pattern: 'src/Resources/public/studio/build/*'
+
   build:
+    if: ${{ github.event_name == 'push' }}
     permissions:
       contents: write
     uses: cors-gmbh/shared-workflows/.github/workflows/frontend-build.yaml@main
     with:
-      file-pattern: 'bundles/*/Resources/public/studio/*/**'
-      commit-message: "Build Pimcore Legacy Studio bundles [skip ci]"
+      commit: true
+      file-pattern: 'src/Resources/public/studio/build/*'
+    secrets:
+      gh_app_id: ${{ secrets.GH_APP_ID }}
+      gh_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
 ```
+
+Two things the consuming repo has to get right:
+
+- **Build id from the sources.** The build has to derive its output directory
+  from a hash of the sources, not from a random uuid — otherwise every run
+  rewrites every asset path and commits a diff that contains no real change.
+- **Push access to the release branch.** Where a ruleset requires pull requests,
+  `GITHUB_TOKEN` cannot push. Passing `gh_app_id`/`gh_app_private_key` (the CORS
+  CD Bot) makes the commit with the app's installation token instead; the app is
+  a bypass actor on those rulesets. Without them the job falls back to the default
+  token and fails loudly if the push is refused.
 
 ## Migration from GitLab
 

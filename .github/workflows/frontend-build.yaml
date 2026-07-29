@@ -1,9 +1,16 @@
 name: "🎨 Frontend Build"
 
-# Builds a Pimcore Studio frontend (Rsbuild/module-federation), type-checks it,
-# and commits the produced public assets back to the branch.
-# Consuming repos call it via:
+# Builds a Pimcore Studio frontend (Rsbuild/module-federation), type-checks it, and — on a push
+# to a release branch — commits the produced public assets back to that branch.
+#
+# Consuming repos call it twice: once with `commit: false` for pull requests, so their diffs stay
+# limited to the actual source changes, and once with `commit: true` for pushes to the release
+# branch. See examples/frontend-build-caller.yaml.
+#
 #   uses: cors-gmbh/shared-workflows/.github/workflows/frontend-build.yaml@main
+#
+# The build is expected to derive its build id from the sources (a content hash, not a random
+# uuid). Otherwise every run rewrites every asset path and commits a diff without a real change.
 
 on:
   workflow_call:
@@ -39,31 +46,49 @@ on:
         type: string
         default: "npm run build"
       file-pattern:
-        description: "Glob of built assets to commit back to the branch"
+        description: >-
+          Pathspec of the built assets. Passed to `git add --all`, so deletions of stale build
+          directories are staged too — use a directory pattern such as
+          'src/Resources/public/studio/build/*' rather than a '/**' glob.
         required: true
         type: string
+      commit:
+        description: >-
+          Commit the built assets back to the branch. Set this to false for pull request builds,
+          so their diffs stay limited to the actual source changes. It defaults to true because
+          committing was the workflow's only behaviour before the input existed.
+        required: false
+        type: boolean
+        default: true
       commit-message:
         description: "Commit message for the built assets"
         required: false
         type: string
-        default: "Build Studio frontend assets [skip ci]"
+        default: "Build Studio frontend assets"
+    secrets:
+      gh_app_id:
+        description: >-
+          GitHub App ID as a secret (falls back to vars.GH_APP_ID if unset). Only needed when the
+          release branch has a ruleset that GITHUB_TOKEN cannot bypass; the app has to be a bypass
+          actor on that ruleset.
+        required: false
+      gh_app_private_key:
+        description: "GitHub App private key belonging to gh_app_id"
+        required: false
 
-env:
-  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
-
-permissions:
-  contents: read
-
+# No workflow-level `permissions`: it would override what the calling job grants, leaving the
+# build job read-only even on the push build. Jobs declare what they need instead.
 jobs:
   check-types:
     if: ${{ inputs.check-types }}
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-        with:
-          ref: ${{ env.BRANCH_NAME }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -81,20 +106,47 @@ jobs:
       - name: Run type checks
         run: ${{ inputs.check-types-command }}
 
+  # No job-level `permissions` block: the job inherits what the calling workflow grants, so the
+  # write scope needed for the commit only exists on the push build.
   build:
     needs: check-types
     # run even when check-types is skipped, but not when it failed
     if: ${{ always() && !failure() && !cancelled() }}
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: write
-
     steps:
+      # Secrets cannot be read in an `if:` condition, so whether an app is configured is decided
+      # in a step that can see them. Without this the workflow would break the moment it lands in
+      # a repo where the credentials are not set up.
+      - name: Check whether a build app is configured
+        id: app-config
+        if: ${{ inputs.commit }}
+        env:
+          APP_ID: ${{ secrets.gh_app_id || vars.GH_APP_ID }}
+          PRIVATE_KEY: ${{ secrets.gh_app_private_key }}
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$PRIVATE_KEY" ]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate a token for the asset commit
+        id: app-token
+        if: ${{ steps.app-config.outputs.configured == 'true' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.gh_app_id || vars.GH_APP_ID }}
+          private-key: ${{ secrets.gh_app_private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          ref: ${{ env.BRANCH_NAME }}
+          # Falls back to the default token when no app is configured. The push then fails loudly
+          # in the commit step rather than silently skipping the assets.
+          token: ${{ steps.app-token.outputs.token || github.token }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -120,9 +172,67 @@ jobs:
       - name: Run production build
         run: ${{ inputs.build-command }}
 
-      - uses: stefanzweifel/git-auto-commit-action@v7
-        with:
-          file_pattern: ${{ inputs.file-pattern }}
-          add_options: '-f'
-          skip_dirty_check: true
-          commit_message: ${{ inputs.commit-message }}
+      # `git add --all` also stages deletions of stale build directories. A glob passed to
+      # git-auto-commit's `file_pattern` misses those: the shell expands it against the working
+      # tree, so directories that no longer exist never reach `git add` and pile up in the repo.
+      - name: Stage built assets
+        id: stage
+        env:
+          FILE_PATTERN: ${{ inputs.file-pattern }}
+        run: |
+          git add --all --force -- "$FILE_PATTERN"
+          if git diff --cached --quiet; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'Built assets are up to date.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            {
+              echo '### Assets changed by this build'
+              echo
+              echo '```'
+              git diff --cached --stat
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Commit built assets
+        if: ${{ inputs.commit && steps.stage.outputs.changed == 'true' }}
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          COMMIT_MESSAGE: ${{ inputs.commit-message }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: |
+          # Attribute the commit to whichever identity actually pushes it. The numeric id in the
+          # noreply address is what links a commit to the bot account on GitHub.
+          if [ -n "$APP_SLUG" ]; then
+            BOT_ID="$(gh api "/users/${APP_SLUG}%5Bbot%5D" --jq .id 2>/dev/null || true)"
+          fi
+          if [ -n "${BOT_ID:-}" ]; then
+            git config user.name "${APP_SLUG}[bot]"
+            git config user.email "${BOT_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          fi
+
+          git commit -m "$COMMIT_MESSAGE"
+
+          if git push origin HEAD:"${GITHUB_REF_NAME}"; then
+            exit 0
+          fi
+
+          # A rejected push has two very different causes, and only one of them is benign: the
+          # branch moved on while we were building, in which case the newer push runs its own
+          # build and supersedes these assets. Anything else — a ruleset rejection, a missing
+          # write scope — means the assets never land, and that must not pass as a green job.
+          # HEAD~1 is the commit this build started from.
+          git fetch --quiet origin "${GITHUB_REF_NAME}"
+          if [ "$(git rev-parse "origin/${GITHUB_REF_NAME}")" != "$(git rev-parse HEAD~1)" ]; then
+            echo "::notice::${GITHUB_REF_NAME} moved on during the build; the newer push rebuilds the assets."
+            echo 'Push skipped: branch moved on during the build.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "::error::Could not push the built assets to ${GITHUB_REF_NAME}. The branch did not move on, so the push was refused — check that gh_app_id/gh_app_private_key are passed and that the app is a bypass actor on the branch ruleset."
+          echo 'Push failed: built assets were not committed.' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
