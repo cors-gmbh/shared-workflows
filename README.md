@@ -86,7 +86,7 @@ the frontend, and commits the produced public assets back to the release branch.
 
 Call it twice: pull requests verify only (`commit: false`), so their diffs stay
 limited to the actual source changes, and the assets are committed once per push
-to the release branch (`commit: true`).
+to the release branch (`commit: true`, the default).
 
 ```yaml
 name: Studio Frontend Build

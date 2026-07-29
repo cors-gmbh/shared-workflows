@@ -54,11 +54,12 @@ on:
         type: string
       commit:
         description: >-
-          Commit the built assets back to the branch. Only enable this for pushes to a release
-          branch — pull requests should build for verification only, so their diffs stay readable.
+          Commit the built assets back to the branch. Set this to false for pull request builds,
+          so their diffs stay limited to the actual source changes. It defaults to true because
+          committing was the workflow's only behaviour before the input existed.
         required: false
         type: boolean
-        default: false
+        default: true
       commit-message:
         description: "Commit message for the built assets"
         required: false
@@ -154,7 +155,7 @@ jobs:
           cache: 'npm'
 
       - name: Cache Rsbuild build cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: node_modules/.cache/rsbuild
           key: rsbuild-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
