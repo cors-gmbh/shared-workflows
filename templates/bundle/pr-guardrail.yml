@@ -32,10 +32,9 @@ jobs:
   guardrail:
     uses: cors-gmbh/shared-workflows/.github/workflows/pr-guardrail.yml@v1
     with:
-      # Rollout-Phase: Hinweismodus. Auf `true` stellen, sobald das Team die
-      # Hinweise eine Weile gesehen hat — dann werden Verstöße blockierend
-      # (PR wird auf Draft gesetzt).
-      enforce: false
+      # Enforce-Modus: Verstöße setzen den PR auf Draft und der Check schlägt
+      # fehl. Für reinen Hinweismodus (nur Kommentar) auf `false` stellen.
+      enforce: true
       # Bundles bekommen viele Renovate-/Dependabot-PRs: diese überspringen
       # R1-R3/R6 automatisch, die CI-Regel (R5) gilt weiterhin.
       # Weitere Optionen (Defaults in Klammern):

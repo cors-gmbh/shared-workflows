@@ -1,9 +1,9 @@
 # Sync-Konfiguration für BetaHuhn/repo-file-sync-action
 # (ausgeführt von .github/workflows/sync-files.yml bei jedem Push auf main).
 #
-# Zwei Gruppen: Projekt-Repos und Bundle-Repos. Beide bekommen den passenden
-# Guardrail-Caller nach .github/workflows/pr-guardrail.yml und das zentrale
-# PR-Template.
+# Drei Gruppen: Projekt-Repos, Bundle-Repos und Dev-/Infrastruktur-Repos.
+# Alle bekommen den passenden Guardrail-Caller nach
+# .github/workflows/pr-guardrail.yml und das zentrale PR-Template.
 #
 # Neues Repo aufnehmen: Eintrag in der passenden repos-Liste ergänzen und auf
 # main mergen — der Sync öffnet dann einen PR im Ziel-Repo.
@@ -15,11 +15,10 @@
 group:
   # ──────────────────────────────────────────────────────────────────────
   # Gruppe 1: Pimcore-PROJEKT-Repos
-  # ➜ PLATZHALTER: echte Projekt-Repos eintragen, Beispiele ersetzen!
   # ──────────────────────────────────────────────────────────────────────
   - repos: |
-      cors-gmbh/beispiel-projekt-a
-      cors-gmbh/beispiel-projekt-b
+      cors-gmbh/bellaflora
+      cors-gmbh/rutar
     files:
       - source: templates/project/pr-guardrail.yml
         dest: .github/workflows/pr-guardrail.yml
@@ -28,11 +27,25 @@ group:
 
   # ──────────────────────────────────────────────────────────────────────
   # Gruppe 2: Pimcore-BUNDLE-Repos
-  # ➜ PLATZHALTER: echte Bundle-Repos eintragen, Beispiele ersetzen!
   # ──────────────────────────────────────────────────────────────────────
   - repos: |
-      cors-gmbh/beispiel-bundle-a
-      cors-gmbh/beispiel-bundle-b
+      cors-gmbh/pimcore-sso
+      cors-gmbh/pimcore-search-bundle
+      cors-gmbh/pimcore-docker
+    files:
+      - source: templates/bundle/pr-guardrail.yml
+        dest: .github/workflows/pr-guardrail.yml
+      - source: templates/pull_request_template.md
+        dest: .github/pull_request_template.md
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Gruppe 3: DEV-/INFRASTRUKTUR-Repos (keine Bundles, gehören aber zum
+  # Development dazu — bekommen den Bundle-Caller)
+  # ──────────────────────────────────────────────────────────────────────
+  - repos: |
+      cors-gmbh/dev-compose
+      cors-gmbh/dev
+      cors-gmbh/dev-local-infra
     files:
       - source: templates/bundle/pr-guardrail.yml
         dest: .github/workflows/pr-guardrail.yml

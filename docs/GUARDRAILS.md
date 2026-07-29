@@ -24,12 +24,13 @@ Caller (`.github/workflows/pr-guardrail.yml`), die Logik bleibt zentral.
 
 Das hängt vom `enforce`-Input im Caller ab:
 
-- **`enforce: false` (Hinweismodus, Rollout-Default):** Der Guardrail
-  schreibt einen Sticky-Kommentar, der klar als Hinweismodus gekennzeichnet
-  ist. Der Job bleibt **grün**, nichts wird blockiert.
-- **`enforce: true`:** Der PR wird auf **Draft** zurückgesetzt, der
-  Sticky-Kommentar listet genau die verletzten Regeln mit je einem konkreten
-  Handlungssatz, und der Guardrail-Job schlägt fehl.
+- **`enforce: true` (Standard in den verteilten Callern):** Der PR wird auf
+  **Draft** zurückgesetzt, der Sticky-Kommentar listet genau die verletzten
+  Regeln mit je einem konkreten Handlungssatz, und der Guardrail-Job schlägt
+  fehl.
+- **`enforce: false` (Hinweismodus):** Der Guardrail schreibt einen
+  Sticky-Kommentar, der klar als Hinweismodus gekennzeichnet ist. Der Job
+  bleibt **grün**, nichts wird blockiert.
 
 Der Kommentar ist immer derselbe (Marker `<!-- pr-guardrail -->`) und wird
 aktualisiert statt neu angelegt. Sind alle Regeln erfüllt, schrumpft er auf
@@ -78,10 +79,10 @@ Es gibt **keinen** anderen Bypass — weder per Commit-Message noch per
 Body-Keyword oder Umgebungsvariable. Label entfernen ⇒ nächstes Event prüft
 wieder normal.
 
-## Rollout: von Hinweis auf Enforce umstellen
+## Enforce-Modus zentral umstellen
 
-Im synchronisierten Caller (`.github/workflows/pr-guardrail.yml` im
-Ziel-Repo) steht `enforce: false`. Umgestellt wird **zentral** in
+Die synchronisierten Caller stehen auf `enforce: true` — Verstöße blockieren
+also von Anfang an. Umgestellt wird **zentral** in
 `templates/project/pr-guardrail.yml` bzw. `templates/bundle/pr-guardrail.yml`
 in diesem Repo — der nächste Sync verteilt die Änderung. Einzelne Repos
 können abweichen, indem man ihren Caller aus dem Sync nimmt (eigene Gruppe in
@@ -131,8 +132,9 @@ automatisch aus dem App-Slug).
 1. Prüfen, dass die **App im Ziel-Repo installiert** ist und die Org-Secrets
    `GH_APP_ID`/`GH_APP_PRIVATE_KEY` dort sichtbar sind (siehe oben).
 2. In [`.github/sync.yml`](../.github/sync.yml) das Repo in die passende
-   Gruppe eintragen (`projects` = Projekt-Repos, `bundles` = Bundle-Repos).
-   Achtung: innerhalb der `repos: |`-Blöcke sind keine Kommentare möglich.
+   Gruppe eintragen (Projekt-Repos, Bundle-Repos oder Dev-/Infrastruktur-
+   Repos). Achtung: innerhalb der `repos: |`-Blöcke sind keine Kommentare
+   möglich.
 3. Auf `main` mergen (oder `sync-files.yml` per `workflow_dispatch` starten).
 4. Im Ziel-Repo den Sync-PR (`repo-sync/...`, Label `file-sync`) mergen.
 5. Optional: das Label `guardrail-bypass` im Ziel-Repo anlegen (Farbe/Text
