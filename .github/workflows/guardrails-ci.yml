@@ -1,0 +1,31 @@
+name: "🧪 Guardrails CI"
+
+# Unit tests for the guardrail rule modules (node:test, no dependencies).
+
+on:
+  pull_request:
+    paths:
+      - "scripts/guardrails/**"
+      - ".github/workflows/guardrails-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/guardrails/**"
+      - ".github/workflows/guardrails-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: "📥 Checkout"
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: "🧪 Run tests"
+        run: node --test scripts/guardrails/*.test.mjs

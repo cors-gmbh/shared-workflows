@@ -1,0 +1,55 @@
+name: "📋 PR to Project"
+
+# Separately activatable reusable workflow: adds a PR to the Projects-V2
+# boards of the issues it closes (closingIssuesReferences -> projectItems ->
+# addProjectV2ItemById). Idempotent — boards the PR is already on are
+# skipped, and PRs without linked projects succeed without doing anything.
+#
+# Works well together with the guardrail's R6 (automatic `Closes #<n>`), but
+# has no dependency on it.
+
+on:
+  workflow_call:
+    secrets:
+      GH_APP_ID:
+        description: "App ID of the CORS CD bot (org secret, pass via `secrets: inherit`)."
+        required: true
+      GH_APP_PRIVATE_KEY:
+        description: "Private key of the CORS CD bot (org secret, pass via `secrets: inherit`)."
+        required: true
+
+# Everything runs through the app token (org "Projects" permission required).
+permissions: {}
+
+jobs:
+  add-to-project:
+    # Only PR events carry the closing-issue references we need — the caller
+    # may share its triggers with the guardrail (check_suite, status, ...).
+    if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: "🔑 Create app token"
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: >-
+            ${{ github.event.repository.name }},shared-workflows
+
+      - name: "📥 Checkout scripts"
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          repository: ${{ github.repository_owner }}/shared-workflows
+          ref: ${{ github.job_workflow_sha }}
+          token: ${{ steps.app-token.outputs.token }}
+          sparse-checkout: scripts/guardrails
+          persist-credentials: false
+
+      - name: "📋 Add PR to linked projects"
+        env:
+          GUARDRAIL_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node scripts/guardrails/run-pr-to-project.mjs
