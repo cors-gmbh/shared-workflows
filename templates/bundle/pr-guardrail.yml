@@ -43,3 +43,10 @@ jobs:
       # bots: 'renovate[bot],dependabot[bot],github-actions[bot]'
       # bot-require-body: false   # R4 auch für Bot-PRs (false)
     secrets: inherit
+
+  # Legt den PR automatisch in die Projects-Boards der verknüpften Issues.
+  # Zum Deaktivieren auskommentieren.
+  pr-to-project:
+    if: github.event_name == 'pull_request_target'
+    uses: cors-gmbh/shared-workflows/.github/workflows/pr-to-project.yml@v1
+    secrets: inherit

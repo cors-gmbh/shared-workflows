@@ -140,14 +140,16 @@ automatisch aus dem App-Slug).
 5. Optional: das Label `guardrail-bypass` im Ziel-Repo anlegen (Farbe/Text
    frei), damit es in der Label-Auswahl auftaucht.
 
-## `pr-to-project.yml` aktivieren
+## `pr-to-project.yml`
 
 Der zweite Reusable Workflow legt PRs automatisch in die Projects-V2-Boards,
 in denen ihre verknüpften Issues liegen (aufgelöst über
-`closingIssuesReferences`, deshalb spielt R6 gut zu). Er ist unabhängig vom
-Guardrail aktivierbar: im Projekt-Caller-Template ist ein auskommentierter
-Job enthalten — einkommentieren, fertig. Ohne verknüpfte Projekte tut der
-Job nichts und bleibt grün (idempotent).
+`closingIssuesReferences`, deshalb spielt R6 gut zu). Er ist in allen
+verteilten Callern (Projekte, Bundles, Dev-Repos) **standardmäßig aktiv**,
+läuft aber unabhängig vom Guardrail — zum Deaktivieren den Job
+`pr-to-project` im Caller-Template auskommentieren. Ohne verknüpfte Projekte
+tut der Job nichts und bleibt grün (idempotent). Voraussetzung: Die App hat
+die Organization-Permission **Projects: Read & Write**.
 
 ## Versionierung
 
