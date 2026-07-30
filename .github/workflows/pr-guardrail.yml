@@ -1,0 +1,114 @@
+name: "🚦 PR Guardrail"
+
+# Reusable PR guardrail for all CORS project and bundle repos.
+#
+# Called via workflow_call from the synced caller workflow
+# (templates/pr-guardrail.yml).
+# The caller defines the actual triggers (pull_request_target, check_suite,
+# status) — inside a reusable workflow the `github` context carries the
+# caller's event, so this file can stay trigger-agnostic.
+#
+# Security model: the caller listens on pull_request_target, which runs with
+# base-repo secrets. Therefore this workflow NEVER checks out or executes PR
+# head code — only cors-gmbh/shared-workflows at the exact ref of this
+# workflow file. Untrusted event data (title, body, branch) is passed to the
+# script through the event payload file, never interpolated into shell code.
+
+on:
+  workflow_call:
+    inputs:
+      enforce:
+        description: "Enforce mode: convert violating PRs to draft and fail the job. false = hint mode (comment only, job stays green)."
+        type: boolean
+        required: false
+        default: false
+      min-body-chars:
+        description: "Minimum number of prose characters required in the PR body after stripping HTML comments, headings and empty checkboxes (R4)."
+        type: number
+        required: false
+        default: 50
+      require-issue-open:
+        description: "Require the issue referenced by the branch to be open (R2)."
+        type: boolean
+        required: false
+        default: true
+      branch-pattern:
+        description: "Case-insensitive regex for head branch names (R1). Capture group 1 must contain the issue number."
+        type: string
+        required: false
+        default: '^issue/(\d+)(?:-.*)?$'
+      title-template:
+        description: "Template for the title autofix (R3). Placeholders: {number}, {issueTitle}."
+        type: string
+        required: false
+        default: '#{number} {issueTitle}'
+      bots:
+        description: "Comma-separated bot logins that skip R1-R3 and R6. R5 always applies. The guardrail's own app is added automatically."
+        type: string
+        required: false
+        default: 'renovate[bot],dependabot[bot],github-actions[bot]'
+      bot-require-body:
+        description: "Apply the body rule (R4) to bot PRs as well."
+        type: boolean
+        required: false
+        default: false
+      bypass-label:
+        description: "Label that lets repo admins/maintainers bypass the guardrail (audited)."
+        type: string
+        required: false
+        default: 'guardrail-bypass'
+    secrets:
+      GH_APP_ID:
+        description: "App ID of the CORS CD bot (org secret, pass via `secrets: inherit`)."
+        required: true
+      GH_APP_PRIVATE_KEY:
+        description: "Private key of the CORS CD bot (org secret, pass via `secrets: inherit`)."
+        required: true
+
+# GITHUB_TOKEN is only used to read the job names of this very run (check-run
+# self-exclusion). Every other API access goes through the app token.
+permissions:
+  actions: read
+
+jobs:
+  guardrail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: "🔑 Create app token"
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: >-
+            ${{ github.event.repository.name }},shared-workflows
+
+      # Guardrail logic always comes from the base side: shared-workflows at
+      # the exact commit of this reusable workflow (job_workflow_sha), so the
+      # caller's @v1 pin also pins the scripts.
+      - name: "📥 Checkout guardrail scripts"
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          repository: ${{ github.repository_owner }}/shared-workflows
+          ref: ${{ github.job_workflow_sha }}
+          token: ${{ steps.app-token.outputs.token }}
+          sparse-checkout: scripts/guardrails
+          persist-credentials: false
+
+      - name: "🚦 Evaluate guardrail"
+        env:
+          GUARDRAIL_TOKEN: ${{ steps.app-token.outputs.token }}
+          ACTIONS_TOKEN: ${{ github.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          INPUT_ENFORCE: ${{ inputs.enforce }}
+          INPUT_MIN_BODY_CHARS: ${{ inputs.min-body-chars }}
+          INPUT_REQUIRE_ISSUE_OPEN: ${{ inputs.require-issue-open }}
+          INPUT_BRANCH_PATTERN: ${{ inputs.branch-pattern }}
+          INPUT_TITLE_TEMPLATE: ${{ inputs.title-template }}
+          INPUT_BOTS: ${{ inputs.bots }}
+          INPUT_BOT_REQUIRE_BODY: ${{ inputs.bot-require-body }}
+          INPUT_BYPASS_LABEL: ${{ inputs.bypass-label }}
+        run: node scripts/guardrails/run-guardrail.mjs

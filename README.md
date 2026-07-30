@@ -12,6 +12,9 @@ Reusable GitHub Actions workflows for CORS Pimcore projects and bundles.
 | `containerize.yaml` | `build_and_push` stage | Multi-target Docker build, GHCR or GCP registry |
 | `update-manifest.yaml` | `update_manifest` stage | CD repo update via yq or helm template (GitOps) |
 | `frontend-build.yaml` | — | Build Pimcore Studio frontend (Rsbuild), type-check, commit assets |
+| `pr-guardrail.yml` | — | PR guardrails: branch/issue conventions, description, CI state ([docs](docs/GUARDRAILS.md)) |
+| `pr-to-project.yml` | — | Add PRs to the Projects-V2 boards of their linked issues |
+| `sync-files.yml` | — | Distribute guardrail callers + PR template to org repos (config: `.github/sync.yml`) |
 
 ## Quick Start
 

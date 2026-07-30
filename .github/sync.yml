@@ -1,0 +1,54 @@
+# Sync-Konfiguration für BetaHuhn/repo-file-sync-action
+# (ausgeführt von .github/workflows/sync-files.yml bei jedem Push auf main).
+#
+# Alle Gruppen bekommen denselben Guardrail-Caller nach
+# .github/workflows/pr-guardrail.yml und das zentrale PR-Template. Die
+# Gruppen sind nur deshalb getrennt, damit einzelne Repo-Typen später
+# gezielt abweichen können (z. B. eigenes Template mit anderen Inputs).
+#
+# Neues Repo aufnehmen: Eintrag in der passenden repos-Liste ergänzen und auf
+# main mergen — der Sync öffnet dann einen PR im Ziel-Repo.
+# Siehe docs/GUARDRAILS.md, Abschnitt "Neues Repo in den Sync aufnehmen".
+#
+# WICHTIG: Innerhalb der `repos: |`-Blöcke sind KEINE Kommentare möglich —
+# jede Zeile wird als Repo-Name interpretiert.
+
+group:
+  # ──────────────────────────────────────────────────────────────────────
+  # Gruppe 1: Pimcore-PROJEKT-Repos
+  # ──────────────────────────────────────────────────────────────────────
+  - repos: |
+      cors-gmbh/bellaflora
+      cors-gmbh/rutar
+    files:
+      - source: templates/pr-guardrail.yml
+        dest: .github/workflows/pr-guardrail.yml
+      - source: templates/pull_request_template.md
+        dest: .github/pull_request_template.md
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Gruppe 2: Pimcore-BUNDLE-Repos
+  # ──────────────────────────────────────────────────────────────────────
+  - repos: |
+      cors-gmbh/pimcore-sso
+      cors-gmbh/pimcore-search-bundle
+      cors-gmbh/pimcore-docker
+    files:
+      - source: templates/pr-guardrail.yml
+        dest: .github/workflows/pr-guardrail.yml
+      - source: templates/pull_request_template.md
+        dest: .github/pull_request_template.md
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Gruppe 3: DEV-/INFRASTRUKTUR-Repos (keine Bundles, gehören aber zum
+  # Development dazu)
+  # ──────────────────────────────────────────────────────────────────────
+  - repos: |
+      cors-gmbh/dev-compose
+      cors-gmbh/dev
+      cors-gmbh/dev-local-infra
+    files:
+      - source: templates/pr-guardrail.yml
+        dest: .github/workflows/pr-guardrail.yml
+      - source: templates/pull_request_template.md
+        dest: .github/pull_request_template.md
