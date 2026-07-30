@@ -1,9 +1,10 @@
 # Sync-Konfiguration für BetaHuhn/repo-file-sync-action
 # (ausgeführt von .github/workflows/sync-files.yml bei jedem Push auf main).
 #
-# Drei Gruppen: Projekt-Repos, Bundle-Repos und Dev-/Infrastruktur-Repos.
-# Alle bekommen den passenden Guardrail-Caller nach
-# .github/workflows/pr-guardrail.yml und das zentrale PR-Template.
+# Alle Gruppen bekommen denselben Guardrail-Caller nach
+# .github/workflows/pr-guardrail.yml und das zentrale PR-Template. Die
+# Gruppen sind nur deshalb getrennt, damit einzelne Repo-Typen später
+# gezielt abweichen können (z. B. eigenes Template mit anderen Inputs).
 #
 # Neues Repo aufnehmen: Eintrag in der passenden repos-Liste ergänzen und auf
 # main mergen — der Sync öffnet dann einen PR im Ziel-Repo.
@@ -20,7 +21,7 @@ group:
       cors-gmbh/bellaflora
       cors-gmbh/rutar
     files:
-      - source: templates/project/pr-guardrail.yml
+      - source: templates/pr-guardrail.yml
         dest: .github/workflows/pr-guardrail.yml
       - source: templates/pull_request_template.md
         dest: .github/pull_request_template.md
@@ -33,21 +34,21 @@ group:
       cors-gmbh/pimcore-search-bundle
       cors-gmbh/pimcore-docker
     files:
-      - source: templates/bundle/pr-guardrail.yml
+      - source: templates/pr-guardrail.yml
         dest: .github/workflows/pr-guardrail.yml
       - source: templates/pull_request_template.md
         dest: .github/pull_request_template.md
 
   # ──────────────────────────────────────────────────────────────────────
   # Gruppe 3: DEV-/INFRASTRUKTUR-Repos (keine Bundles, gehören aber zum
-  # Development dazu — bekommen den Bundle-Caller)
+  # Development dazu)
   # ──────────────────────────────────────────────────────────────────────
   - repos: |
       cors-gmbh/dev-compose
       cors-gmbh/dev
       cors-gmbh/dev-local-infra
     files:
-      - source: templates/bundle/pr-guardrail.yml
+      - source: templates/pr-guardrail.yml
         dest: .github/workflows/pr-guardrail.yml
       - source: templates/pull_request_template.md
         dest: .github/pull_request_template.md

@@ -1,7 +1,7 @@
 # ⚠️  ZENTRAL VERWALTETE DATEI — NICHT LOKAL ÄNDERN!
 #
 # Diese Datei wird aus cors-gmbh/shared-workflows per File-Sync verteilt
-# (Quelle: templates/project/pr-guardrail.yml). Lokale Änderungen werden beim
+# (Quelle: templates/pr-guardrail.yml). Lokale Änderungen werden beim
 # nächsten Sync-Lauf per PR überschrieben.
 #
 # Regeln, Bypass und FAQ: docs/GUARDRAILS.md in cors-gmbh/shared-workflows.
@@ -10,7 +10,8 @@ name: PR Guardrail
 
 on:
   # pull_request_target statt pull_request: läuft immer mit dem Code und den
-  # Secrets des Basis-Branches. Der Guardrail checkt NIE PR-Code aus.
+  # Secrets des Basis-Branches. Der Guardrail checkt NIE PR-Code aus —
+  # wichtig, weil z. B. Bundle-Repos auch PRs von Forks bekommen können.
   pull_request_target:
     types: [opened, reopened, edited, ready_for_review, labeled, unlabeled]
   # Reagiert auf abgeschlossene CI-Läufe (R5) …
@@ -34,6 +35,8 @@ jobs:
       # Enforce-Modus: Verstöße setzen den PR auf Draft und der Check schlägt
       # fehl. Für reinen Hinweismodus (nur Kommentar) auf `false` stellen.
       enforce: true
+      # Bot-PRs (z. B. Renovate/Dependabot) überspringen R1-R3/R6 automatisch,
+      # die CI-Regel (R5) gilt weiterhin.
       # Weitere Optionen (Defaults in Klammern):
       # min-body-chars: 50        # Mindestlänge der PR-Beschreibung (50)
       # require-issue-open: true  # Issue muss offen sein (true)

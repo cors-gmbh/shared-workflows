@@ -83,10 +83,9 @@ wieder normal.
 
 Die synchronisierten Caller stehen auf `enforce: true` — Verstöße blockieren
 also von Anfang an. Umgestellt wird **zentral** in
-`templates/project/pr-guardrail.yml` bzw. `templates/bundle/pr-guardrail.yml`
-in diesem Repo — der nächste Sync verteilt die Änderung. Einzelne Repos
-können abweichen, indem man ihren Caller aus dem Sync nimmt (eigene Gruppe in
-`.github/sync.yml`).
+`templates/pr-guardrail.yml` in diesem Repo — der nächste Sync verteilt die
+Änderung. Einzelne Repos oder Gruppen können abweichen, indem man ihnen in
+`.github/sync.yml` ein eigenes Template mit anderen Inputs zuweist.
 
 ## Secrets und App-Permissions
 
