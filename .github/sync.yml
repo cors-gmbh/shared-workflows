@@ -1,10 +1,11 @@
 # Sync-Konfiguration für BetaHuhn/repo-file-sync-action
 # (ausgeführt von .github/workflows/sync-files.yml bei jedem Push auf main).
 #
-# Alle Gruppen bekommen denselben Guardrail-Caller nach
-# .github/workflows/pr-guardrail.yml und das zentrale PR-Template. Die
-# Gruppen sind nur deshalb getrennt, damit einzelne Repo-Typen später
-# gezielt abweichen können (z. B. eigenes Template mit anderen Inputs).
+# Jede Gruppe bekommt einen Guardrail-Caller nach
+# .github/workflows/pr-guardrail.yml und das zentrale PR-Template. Gruppen 1-4
+# nutzen dasselbe Enforce-Template; Gruppe 5 (öffentliche OSS-Repos) bekommt
+# den Hinweismodus-Caller. Die Trennung erlaubt es, einzelnen Repo-Typen
+# abweichende Inputs zu geben.
 #
 # Neues Repo aufnehmen: Eintrag in der passenden repos-Liste ergänzen und auf
 # main mergen — der Sync öffnet dann einen PR im Ziel-Repo.
@@ -49,6 +50,30 @@ group:
       cors-gmbh/dev-local-infra
     files:
       - source: templates/pr-guardrail.yml
+        dest: .github/workflows/pr-guardrail.yml
+      - source: templates/pull_request_template.md
+        dest: .github/pull_request_template.md
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Gruppe 4: Sonstige ANWENDUNGS-Repos (kein Pimcore, eigener Stack)
+  # ──────────────────────────────────────────────────────────────────────
+  - repos: |
+      cors-gmbh/chronos
+    files:
+      - source: templates/pr-guardrail.yml
+        dest: .github/workflows/pr-guardrail.yml
+      - source: templates/pull_request_template.md
+        dest: .github/pull_request_template.md
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Gruppe 5: ÖFFENTLICHE Open-Source-Repos mit externen Contributors.
+  # Bekommen den Hinweismodus-Caller (pr-guardrail-oss.yml) statt des
+  # Enforce-Templates, damit Fork-PRs nicht automatisch auf Draft landen.
+  # ──────────────────────────────────────────────────────────────────────
+  - repos: |
+      cors-gmbh/pimcore-data-definitions
+    files:
+      - source: templates/pr-guardrail-oss.yml
         dest: .github/workflows/pr-guardrail.yml
       - source: templates/pull_request_template.md
         dest: .github/pull_request_template.md

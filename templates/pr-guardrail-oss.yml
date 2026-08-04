@@ -1,0 +1,54 @@
+# ⚠️  ZENTRAL VERWALTETE DATEI — NICHT LOKAL ÄNDERN!
+#
+# Diese Datei wird aus cors-gmbh/shared-workflows per File-Sync verteilt
+# (Quelle: templates/pr-guardrail-oss.yml). Lokale Änderungen werden beim
+# nächsten Sync-Lauf per PR überschrieben.
+#
+# Variante für ÖFFENTLICHE Open-Source-Repos mit externen Contributors und
+# Fork-PRs. Unterschied zum Standard-Template (templates/pr-guardrail.yml):
+# Hinweismodus statt Enforce, damit Community-PRs nicht automatisch auf Draft
+# gesetzt werden, nur weil sie die interne Branch-Konvention nicht kennen.
+#
+# Regeln, Bypass und FAQ: docs/GUARDRAILS.md in cors-gmbh/shared-workflows.
+
+name: PR Guardrail
+
+on:
+  # pull_request_target statt pull_request: läuft immer mit dem Code und den
+  # Secrets des Basis-Branches. Der Guardrail checkt NIE PR-Code aus —
+  # hier besonders wichtig, weil das Repo PRs von Forks bekommt.
+  pull_request_target:
+    types: [opened, reopened, edited, ready_for_review, labeled, unlabeled]
+  # Reagiert auf abgeschlossene CI-Läufe (R5) …
+  check_suite:
+    types: [completed]
+  # … und auf klassische Commit-Statuses externer CI-Systeme.
+  status: {}
+
+permissions:
+  actions: read
+
+# Ein Lauf pro PR: neue Events brechen laufende Prüfungen desselben PRs ab.
+concurrency:
+  group: pr-guardrail-${{ github.event.pull_request.number || github.event.check_suite.head_sha || github.event.sha || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  guardrail:
+    uses: cors-gmbh/shared-workflows/.github/workflows/pr-guardrail.yml@v1
+    with:
+      # Hinweismodus: der Guardrail kommentiert nur, der Check bleibt grün und
+      # der PR wird nicht auf Draft gesetzt. Externe Contributors branchen
+      # nicht nach issue/<nummer> (R1) und haben oft kein Issue (R2) — im
+      # Enforce-Modus wäre jeder Community-PR sofort blockiert.
+      enforce: false
+      # Fixes ohne vorheriges Issue sind in OSS-Repos normal.
+      require-issue-open: false
+    secrets: inherit
+
+  # Legt den PR automatisch in die Projects-Boards der verknüpften Issues.
+  # Zum Deaktivieren auskommentieren.
+  pr-to-project:
+    if: github.event_name == 'pull_request_target'
+    uses: cors-gmbh/shared-workflows/.github/workflows/pr-to-project.yml@v1
+    secrets: inherit
