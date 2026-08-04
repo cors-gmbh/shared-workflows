@@ -68,12 +68,13 @@ group:
   # ──────────────────────────────────────────────────────────────────────
   # Gruppe 5: ÖFFENTLICHE Open-Source-Repos mit externen Contributors.
   # Bekommen den Hinweismodus-Caller (pr-guardrail-oss.yml) statt des
-  # Enforce-Templates, damit Fork-PRs nicht automatisch auf Draft landen.
+  # Enforce-Templates, damit Fork-PRs nicht automatisch auf Draft landen,
+  # und ein englisches PR-Template.
   # ──────────────────────────────────────────────────────────────────────
   - repos: |
       cors-gmbh/pimcore-data-definitions
     files:
       - source: templates/pr-guardrail-oss.yml
         dest: .github/workflows/pr-guardrail.yml
-      - source: templates/pull_request_template.md
+      - source: templates/pull_request_template-oss.md
         dest: .github/pull_request_template.md
