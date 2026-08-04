@@ -87,6 +87,17 @@ also von Anfang an. Umgestellt wird **zentral** in
 Änderung. Einzelne Repos oder Gruppen können abweichen, indem man ihnen in
 `.github/sync.yml` ein eigenes Template mit anderen Inputs zuweist.
 
+### Öffentliche OSS-Repos: `templates/pr-guardrail-oss.yml`
+
+Für **öffentliche** Repos mit externen Contributors (Gruppe 5 in
+`.github/sync.yml`, z. B. `pimcore-data-definitions`) gibt es einen zweiten
+Caller mit `enforce: false` und `require-issue-open: false`. Grund: Fork-
+Contributors branchen nicht nach `issue/<nummer>` (R1) und legen oft kein
+Issue an (R2) — im Enforce-Modus würde jeder Community-PR sofort auf Draft
+gesetzt. Der Guardrail kommentiert dort also nur, der Check bleibt grün.
+Ansonsten ist die Datei inhaltlich identisch (gleiche Trigger, gleiche
+Concurrency, `pr-to-project` aktiv).
+
 ## Secrets und App-Permissions
 
 Beide Workflows authentifizieren sich als **CORS CD Bot** (GitHub App) über
@@ -131,12 +142,16 @@ automatisch aus dem App-Slug).
 1. Prüfen, dass die **App im Ziel-Repo installiert** ist und die Org-Secrets
    `GH_APP_ID`/`GH_APP_PRIVATE_KEY` dort sichtbar sind (siehe oben).
 2. In [`.github/sync.yml`](../.github/sync.yml) das Repo in die passende
-   Gruppe eintragen (Projekt-Repos, Bundle-Repos oder Dev-/Infrastruktur-
-   Repos). Achtung: innerhalb der `repos: |`-Blöcke sind keine Kommentare
-   möglich.
-3. Auf `main` mergen (oder `sync-files.yml` per `workflow_dispatch` starten).
-4. Im Ziel-Repo den Sync-PR (`repo-sync/...`, Label `file-sync`) mergen.
-5. Optional: das Label `guardrail-bypass` im Ziel-Repo anlegen (Farbe/Text
+   Gruppe eintragen (Projekt-Repos, Bundle-Repos, Dev-/Infrastruktur-Repos,
+   sonstige Anwendungs-Repos oder öffentliche OSS-Repos). Achtung: innerhalb
+   der `repos: |`-Blöcke sind keine Kommentare möglich.
+3. Falls das Repo schon ein eigenes `PULL_REQUEST_TEMPLATE.md` im Root oder in
+   `docs/` hat: dieses **löschen**, sonst konkurriert es mit dem gesyncten
+   `.github/pull_request_template.md`. Der File-Sync kann nur schreiben, nicht
+   löschen — das braucht einen separaten PR im Ziel-Repo.
+4. Auf `main` mergen (oder `sync-files.yml` per `workflow_dispatch` starten).
+5. Im Ziel-Repo den Sync-PR (`repo-sync/...`, Label `file-sync`) mergen.
+6. Optional: das Label `guardrail-bypass` im Ziel-Repo anlegen (Farbe/Text
    frei), damit es in der Label-Auswahl auftaucht.
 
 ## `pr-to-project.yml`
