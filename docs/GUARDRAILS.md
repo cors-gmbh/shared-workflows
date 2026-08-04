@@ -98,6 +98,11 @@ gesetzt. Der Guardrail kommentiert dort also nur, der Check bleibt grün.
 Ansonsten ist die Datei inhaltlich identisch (gleiche Trigger, gleiche
 Concurrency, `pr-to-project` aktiv).
 
+Dazu gehört `templates/pull_request_template-oss.md` — dieselbe Struktur wie
+das interne Template, aber **auf Englisch** (die Contributors sind
+international) und mit der in OSS-Repos üblichen Q/A-Tabelle
+(Bug fix / BC breaks / Fixed tickets).
+
 ## Secrets und App-Permissions
 
 Beide Workflows authentifizieren sich als **CORS CD Bot** (GitHub App) über
