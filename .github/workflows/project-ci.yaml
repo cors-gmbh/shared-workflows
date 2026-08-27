@@ -101,6 +101,9 @@ on:
         required: false
       composer_auth_extra:
         required: false
+      env_local:
+        description: "dotenv content written to .env.local in the test jobs (see php-test.yaml)"
+        required: false
       gcp_credentials:
         required: false
       cd_push_token:
@@ -128,6 +131,7 @@ jobs:
     secrets:
       composer_auth: ${{ secrets.composer_auth }}
       composer_auth_extra: ${{ secrets.composer_auth_extra }}
+      env_local: ${{ secrets.env_local }}
 
   # --- Resolve image tag (<branch>-<short-sha>) and APP_ENV (push + build only) ---
   prep:

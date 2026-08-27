@@ -87,6 +87,9 @@ on:
       composer_auth_extra:
         description: "Additional Composer auth JSON, merged per-host with composer_auth (e.g. repo.pimcore.com or a repo-specific token)"
         required: false
+      env_local:
+        description: "dotenv content written to .env.local before the kernel boots (e.g. PIMCORE_PRODUCT_KEY / PIMCORE_ENCRYPTION_SECRET that must not live in the committed .env)"
+        required: false
 
 # COMPOSER_AUTH is composed per-job from composer_auth + composer_auth_extra
 # (see "Setup composer auth" steps) so a repo-specific token overrides the base.
@@ -169,6 +172,16 @@ jobs:
 
       - name: Composer install
         run: composer install --no-interaction --prefer-dist
+
+      - name: Write .env.local
+        if: inputs.pimcore
+        env:
+          ENV_LOCAL: ${{ secrets.env_local }}
+        run: |
+          if [ -n "$ENV_LOCAL" ]; then
+            printf '%s\n' "$ENV_LOCAL" > .env.local
+            echo "Wrote .env.local ($(grep -c '=' .env.local) variables)"
+          fi
 
       - name: Build Pimcore classes
         if: inputs.pimcore
@@ -259,6 +272,16 @@ jobs:
       - name: Composer install
         run: composer install --no-interaction --prefer-dist
 
+      - name: Write .env.local
+        if: inputs.pimcore
+        env:
+          ENV_LOCAL: ${{ secrets.env_local }}
+        run: |
+          if [ -n "$ENV_LOCAL" ]; then
+            printf '%s\n' "$ENV_LOCAL" > .env.local
+            echo "Wrote .env.local ($(grep -c '=' .env.local) variables)"
+          fi
+
       - name: Build Pimcore classes
         if: inputs.pimcore
         run: PIMCORE_DISABLE_CACHE=1 bin/console pimcore:build:classes --env=dev
@@ -329,6 +352,16 @@ jobs:
 
       - name: Composer install
         run: composer install --no-interaction --prefer-dist
+
+      - name: Write .env.local
+        if: inputs.pimcore
+        env:
+          ENV_LOCAL: ${{ secrets.env_local }}
+        run: |
+          if [ -n "$ENV_LOCAL" ]; then
+            printf '%s\n' "$ENV_LOCAL" > .env.local
+            echo "Wrote .env.local ($(grep -c '=' .env.local) variables)"
+          fi
 
       - name: Build Pimcore classes
         if: inputs.pimcore
