@@ -22,6 +22,7 @@ group:
       cors-gmbh/bellaflora
       cors-gmbh/rutar
       cors-gmbh/ske-solar
+      cors-gmbh/backaldrin
     files:
       - source: templates/pr-guardrail.yml
         dest: .github/workflows/pr-guardrail.yml
