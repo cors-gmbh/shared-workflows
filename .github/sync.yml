@@ -21,6 +21,7 @@ group:
   - repos: |
       cors-gmbh/bellaflora
       cors-gmbh/rutar
+      cors-gmbh/ske-solar
     files:
       - source: templates/pr-guardrail.yml
         dest: .github/workflows/pr-guardrail.yml
