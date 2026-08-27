@@ -1,0 +1,166 @@
+name: "🔄 Dependency update"
+
+# Reusable: runs `composer update` (and optionally `npm update` in a directory)
+# inside the project's php-cli image (versions from .env) and opens / refreshes
+# a PR from branch `deps/update`. Nothing is pushed to the default branch — CI
+# has to pass and a human merges.
+#
+# The PR is created with the org GitHub App token (GH_APP_ID / GH_APP_PRIVATE_KEY),
+# so CI runs on it (PRs created with GITHUB_TOKEN never trigger workflows) and the
+# PR guardrail treats it as a bot PR.
+#
+# Caller (project repo):
+#   on:
+#     schedule: [{ cron: "30 4 * * 1" }]
+#     workflow_dispatch:
+#   jobs:
+#     update:
+#       uses: cors-gmbh/shared-workflows/.github/workflows/dependency-update.yaml@main
+#       with: { npm-dir: assets/studio }
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      env-file:
+        description: "dotenv file with DOCKER_PHP_VERSION / DOCKER_ALPINE_VERSION / DOCKER_BASE_IMAGE"
+        required: false
+        type: string
+        default: ".env"
+      composer:
+        description: "Run composer update"
+        required: false
+        type: boolean
+        default: true
+      composer-args:
+        description: "Extra arguments for composer update"
+        required: false
+        type: string
+        default: "--with-all-dependencies"
+      npm-dir:
+        description: "Directory with a package.json to `npm update` + build (empty = skip)"
+        required: false
+        type: string
+        default: ""
+      npm-scripts:
+        description: "Space-separated npm scripts to run after the update as a smoke test"
+        required: false
+        type: string
+        default: "build check-types"
+      branch:
+        description: "Branch the PR is opened from"
+        required: false
+        type: string
+        default: "deps/update"
+      labels:
+        required: false
+        type: string
+        default: "dependencies"
+    secrets:
+      composer_auth:
+        required: false
+      composer_auth_extra:
+        required: false
+      gh_app_id:
+        required: true
+      gh_app_private_key:
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  versions:
+    name: "Resolve php-cli image"
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      php-image: ${{ steps.env.outputs.php_image }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: env
+        env:
+          ENV_FILE: ${{ inputs.env-file }}
+        run: |
+          set -a; . "./$ENV_FILE"; set +a
+          : "${DOCKER_PHP_VERSION:?missing in $ENV_FILE}" "${DOCKER_ALPINE_VERSION:?missing}" "${DOCKER_BASE_IMAGE:?missing}"
+          echo "php_image=ghcr.io/cors-gmbh/pimcore-docker/php-cli:${DOCKER_PHP_VERSION}-alpine${DOCKER_ALPINE_VERSION}-${DOCKER_BASE_IMAGE}" >> "$GITHUB_OUTPUT"
+
+  update:
+    name: "composer update / npm update"
+    needs: versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ${{ needs.versions.outputs.php-image }}
+      options: --user root
+    env:
+      APP_ENV: dev
+      COMPOSER_MEMORY_LIMIT: -1
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Tools + composer auth
+        env:
+          BASE: ${{ secrets.composer_auth }}
+          EXTRA: ${{ secrets.composer_auth_extra }}
+        run: |
+          apk add --no-cache git jq nodejs npm >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # same merge rule as php-test.yaml: per-host, extra wins
+          merged="$(jq -c -n --argjson a "${BASE:-{\}}" --argjson b "${EXTRA:-{\}}" '$a * $b')"
+          echo "::add-mask::$merged"
+          echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
+
+      - name: composer update
+        if: inputs.composer
+        env:
+          ARGS: ${{ inputs.composer-args }}
+        run: composer update --no-interaction --no-progress --no-scripts $ARGS
+
+      - name: npm update
+        if: inputs.npm-dir != ''
+        working-directory: ${{ inputs.npm-dir }}
+        env:
+          SCRIPTS: ${{ inputs.npm-scripts }}
+        run: |
+          npm update --no-audit --no-fund
+          npm ci --no-audit --no-fund
+          for s in $SCRIPTS; do npm run "$s"; done
+
+      - name: Summary
+        id: summary
+        env:
+          NPM_DIR: ${{ inputs.npm-dir }}
+        run: |
+          {
+            echo 'body<<EOF'
+            echo 'Automatisches Dependency-Update (`composer update`'"${NPM_DIR:+ + \`npm update\` in \`$NPM_DIR\`}"'), erstellt vom Shared Workflow `dependency-update`.'
+            echo
+            echo '```'
+            git diff --stat -- composer.lock ${NPM_DIR:+"$NPM_DIR/package-lock.json"} || true
+            echo '```'
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.gh_app_id }}
+          private-key: ${{ secrets.gh_app_private_key }}
+
+      - name: Create / update PR
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: ${{ inputs.branch }}
+          delete-branch: true
+          commit-message: "Update dependencies"
+          title: "Update dependencies"
+          body: ${{ steps.summary.outputs.body }}
+          labels: ${{ inputs.labels }}
+          add-paths: |
+            composer.lock
+            ${{ inputs.npm-dir != '' && format('{0}/package-lock.json', inputs.npm-dir) || '' }}
