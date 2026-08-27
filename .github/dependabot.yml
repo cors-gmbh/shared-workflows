@@ -1,0 +1,14 @@
+# Action pins of the reusable workflows are maintained HERE — project repos only
+# carry thin callers (uses: cors-gmbh/shared-workflows/...@main) and need no
+# dependabot of their own.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    labels: [dependencies]
