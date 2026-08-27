@@ -93,7 +93,7 @@ jobs:
       - name: Create GitHub App Token
         id: app-token
         continue-on-error: true
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.gh_app_id || vars.GH_APP_ID }}
           private-key: ${{ secrets.gh_app_private_key }}
@@ -113,7 +113,7 @@ jobs:
           fi
 
       - name: Checkout CD Repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ github.repository_owner }}/${{ inputs.cd-repo }}
           ref: ${{ inputs.cd-repo-branch }}
@@ -148,7 +148,7 @@ jobs:
           done <<< "$YQ_EXPRESSIONS"
 
       - name: Commit and push
-        uses: EndBug/add-and-commit@v9
+        uses: EndBug/add-and-commit@v11
         with:
           author_name: github-actions[bot]
           author_email: github-actions[bot]@users.noreply.github.com
@@ -170,7 +170,7 @@ jobs:
       - name: Create GitHub App Token
         id: app-token
         continue-on-error: true
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.gh_app_id || vars.GH_APP_ID }}
           private-key: ${{ secrets.gh_app_private_key }}
@@ -190,13 +190,13 @@ jobs:
           fi
 
       - name: Checkout Source Repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           path: source
 
       - name: Checkout GitOps Repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ github.repository_owner }}/${{ inputs.cd-repo }}
           ref: ${{ inputs.cd-repo-branch }}
@@ -204,7 +204,7 @@ jobs:
           path: infra
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
 
       - name: Update Helm dependencies
         working-directory: source/${{ inputs.helm-chart-path }}
@@ -255,7 +255,7 @@ jobs:
           done
 
       - name: Commit and push
-        uses: EndBug/add-and-commit@v9
+        uses: EndBug/add-and-commit@v11
         with:
           cwd: infra
           author_name: github-actions[bot]
