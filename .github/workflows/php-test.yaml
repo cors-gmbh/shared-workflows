@@ -88,7 +88,7 @@ on:
         description: "Additional Composer auth JSON, merged per-host with composer_auth (e.g. repo.pimcore.com or a repo-specific token)"
         required: false
       env_local:
-        description: "dotenv content written to .env.local before the kernel boots (e.g. PIMCORE_PRODUCT_KEY / PIMCORE_ENCRYPTION_SECRET that must not live in the committed .env)"
+        description: "dotenv content written to .env.local before the kernel boots (e.g. PIMCORE_PRODUCT_KEY / PIMCORE_ENCRYPTION_SECRET). Lines with an empty value are dropped, so unset secrets fall back to the committed .env"
         required: false
 
 # COMPOSER_AUTH is composed per-job from composer_auth + composer_auth_extra
@@ -178,9 +178,14 @@ jobs:
         env:
           ENV_LOCAL: ${{ secrets.env_local }}
         run: |
-          if [ -n "$ENV_LOCAL" ]; then
-            printf '%s\n' "$ENV_LOCAL" > .env.local
+          # Lines with an empty value (KEY=) are dropped: an unset repo secret must not
+          # override a value the project ships in its committed .env.
+          printf '%s\n' "$ENV_LOCAL" | grep -Ev '^[A-Za-z_][A-Za-z0-9_]*=\s*$' | grep -v '^\s*$' > .env.local || true
+          if [ -s .env.local ]; then
             echo "Wrote .env.local ($(grep -c '=' .env.local) variables)"
+          else
+            rm -f .env.local
+            echo "No .env.local written (no non-empty variables)"
           fi
 
       - name: Build Pimcore classes
@@ -277,9 +282,14 @@ jobs:
         env:
           ENV_LOCAL: ${{ secrets.env_local }}
         run: |
-          if [ -n "$ENV_LOCAL" ]; then
-            printf '%s\n' "$ENV_LOCAL" > .env.local
+          # Lines with an empty value (KEY=) are dropped: an unset repo secret must not
+          # override a value the project ships in its committed .env.
+          printf '%s\n' "$ENV_LOCAL" | grep -Ev '^[A-Za-z_][A-Za-z0-9_]*=\s*$' | grep -v '^\s*$' > .env.local || true
+          if [ -s .env.local ]; then
             echo "Wrote .env.local ($(grep -c '=' .env.local) variables)"
+          else
+            rm -f .env.local
+            echo "No .env.local written (no non-empty variables)"
           fi
 
       - name: Build Pimcore classes
@@ -358,9 +368,14 @@ jobs:
         env:
           ENV_LOCAL: ${{ secrets.env_local }}
         run: |
-          if [ -n "$ENV_LOCAL" ]; then
-            printf '%s\n' "$ENV_LOCAL" > .env.local
+          # Lines with an empty value (KEY=) are dropped: an unset repo secret must not
+          # override a value the project ships in its committed .env.
+          printf '%s\n' "$ENV_LOCAL" | grep -Ev '^[A-Za-z_][A-Za-z0-9_]*=\s*$' | grep -v '^\s*$' > .env.local || true
+          if [ -s .env.local ]; then
             echo "Wrote .env.local ($(grep -c '=' .env.local) variables)"
+          else
+            rm -f .env.local
+            echo "No .env.local written (no non-empty variables)"
           fi
 
       - name: Build Pimcore classes
