@@ -88,10 +88,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           cache: 'npm'
@@ -134,7 +134,7 @@ jobs:
       - name: Generate a token for the asset commit
         id: app-token
         if: ${{ steps.app-config.outputs.configured == 'true' }}
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.gh_app_id || vars.GH_APP_ID }}
           private-key: ${{ secrets.gh_app_private_key }}
@@ -142,20 +142,20 @@ jobs:
           repositories: ${{ github.event.repository.name }}
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Falls back to the default token when no app is configured. The push then fails loudly
           # in the commit step rather than silently skipping the assets.
           token: ${{ steps.app-token.outputs.token || github.token }}
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           cache: 'npm'
 
       - name: Cache Rsbuild build cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: node_modules/.cache/rsbuild
           key: rsbuild-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
