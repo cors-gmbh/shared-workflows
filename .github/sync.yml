@@ -87,33 +87,17 @@ group:
   # Eigener Caller: die Tickets liegen im gleichnamigen Projekt-Repo ohne
   # den Suffix, deshalb sucht der Guardrail das Issue dort
   # (issue-repo-strip-suffix). Dazu ein PR-Template, das genau das erklärt.
+  #
+  # Hier stehen nur Manifeste, deren PROJEKT-Repo schon in Gruppe 1 liegt —
+  # sonst zeigt der Guardrail auf ein Repo, in dem gar keine Tickets geführt
+  # werden. Neue Projekte trägt der Skeleton-Workflow "Create project"
+  # automatisch in beide Gruppen ein.
   # ──────────────────────────────────────────────────────────────────────
   - repos: |
-      cors-gmbh/backaldrin-manifest
-      cors-gmbh/backstage-manifest
       cors-gmbh/bellaflora-manifest
-      cors-gmbh/coreshop-website-manifest
-      cors-gmbh/coreshop3-demo-manifest
-      cors-gmbh/coreshop4-demo-manifest
-      cors-gmbh/coreshop4-enterprise-demo-manifest
-      cors-gmbh/coreshop5-demo-manifest
-      cors-gmbh/ecx-controlling-manifest
-      cors-gmbh/faber-manifest
-      cors-gmbh/huskies-wels-manifest
-      cors-gmbh/kwizda-manifest
-      cors-gmbh/oevgd-manifest
-      cors-gmbh/rofima-manifest
-      cors-gmbh/ronal-bathrooms-manifest
-      cors-gmbh/rubig-manifest
       cors-gmbh/rutar-manifest
       cors-gmbh/ske-solar-manifest
-      cors-gmbh/slackbot-manifest
-      cors-gmbh/sommerhuber-manifest
-      cors-gmbh/suzuki-manifest
-      cors-gmbh/tilo-manifest
-      cors-gmbh/website-2021-manifest
-      cors-gmbh/website-2025-manifest
-      cors-gmbh/zeroridge-manifest
+      cors-gmbh/backaldrin-manifest
     files:
       - source: templates/pr-guardrail-manifest.yml
         dest: .github/workflows/pr-guardrail.yml

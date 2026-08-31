@@ -107,7 +107,12 @@ R6 ergänzt die Closing-Referenz dann **qualifiziert**
 Manifest-Repo zeigen würde. Der Token bekommt zusätzlich Lesezugriff auf das
 Projekt-Repo (siehe Schritt „Resolve token repositories" im Reusable Workflow).
 
-Repos ohne passendes Projekt-Repo (`zeroridge-manifest`) verhalten sich
+In Gruppe 6 gehören nur Manifeste, deren **Projekt-Repo schon im Sync liegt**
+(Gruppe 1) — sonst verweist der Guardrail auf ein Repo, in dem keine Tickets
+geführt werden. Neue Projekte trägt der Skeleton-Workflow „Create project"
+automatisch in beide Gruppen ein.
+
+Repos ohne passendes Projekt-Repo (z. B. `zeroridge-manifest`) verhalten sich
 unverändert: der Lookup dort schlägt fehl und das Manifest-Repo selbst greift
 als Rückfallebene.
 
