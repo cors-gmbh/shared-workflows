@@ -2,9 +2,10 @@
 # (ausgeführt von .github/workflows/sync-files.yml bei jedem Push auf main).
 #
 # Jede Gruppe bekommt einen Guardrail-Caller nach
-# .github/workflows/pr-guardrail.yml und das zentrale PR-Template. Gruppen 1-4
-# nutzen dasselbe Enforce-Template; Gruppe 5 (öffentliche OSS-Repos) bekommt
-# den Hinweismodus-Caller. Die Trennung erlaubt es, einzelnen Repo-Typen
+# .github/workflows/pr-guardrail.yml und ein PR-Template. Gruppen 1-4 nutzen
+# dasselbe Enforce-Template; Gruppe 5 (öffentliche OSS-Repos) bekommt den
+# Hinweismodus-Caller, Gruppe 6 (Manifest-Repos) einen Caller, der das Issue
+# im Projekt-Repo sucht. Die Trennung erlaubt es, einzelnen Repo-Typen
 # abweichende Inputs zu geben.
 #
 # Neues Repo aufnehmen: Eintrag in der passenden repos-Liste ergänzen und auf
@@ -79,4 +80,42 @@ group:
       - source: templates/pr-guardrail-oss.yml
         dest: .github/workflows/pr-guardrail.yml
       - source: templates/pull_request_template-oss.md
+        dest: .github/pull_request_template.md
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Gruppe 6: MANIFEST-Repos (<projekt>-manifest, Kubernetes/ArgoCD).
+  # Eigener Caller: die Tickets liegen im gleichnamigen Projekt-Repo ohne
+  # den Suffix, deshalb sucht der Guardrail das Issue dort
+  # (issue-repo-strip-suffix). Dazu ein PR-Template, das genau das erklärt.
+  # ──────────────────────────────────────────────────────────────────────
+  - repos: |
+      cors-gmbh/backaldrin-manifest
+      cors-gmbh/backstage-manifest
+      cors-gmbh/bellaflora-manifest
+      cors-gmbh/coreshop-website-manifest
+      cors-gmbh/coreshop3-demo-manifest
+      cors-gmbh/coreshop4-demo-manifest
+      cors-gmbh/coreshop4-enterprise-demo-manifest
+      cors-gmbh/coreshop5-demo-manifest
+      cors-gmbh/ecx-controlling-manifest
+      cors-gmbh/faber-manifest
+      cors-gmbh/huskies-wels-manifest
+      cors-gmbh/kwizda-manifest
+      cors-gmbh/oevgd-manifest
+      cors-gmbh/rofima-manifest
+      cors-gmbh/ronal-bathrooms-manifest
+      cors-gmbh/rubig-manifest
+      cors-gmbh/rutar-manifest
+      cors-gmbh/ske-solar-manifest
+      cors-gmbh/slackbot-manifest
+      cors-gmbh/sommerhuber-manifest
+      cors-gmbh/suzuki-manifest
+      cors-gmbh/tilo-manifest
+      cors-gmbh/website-2021-manifest
+      cors-gmbh/website-2025-manifest
+      cors-gmbh/zeroridge-manifest
+    files:
+      - source: templates/pr-guardrail-manifest.yml
+        dest: .github/workflows/pr-guardrail.yml
+      - source: templates/pull_request_template-manifest.md
         dest: .github/pull_request_template.md

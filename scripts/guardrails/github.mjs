@@ -33,7 +33,15 @@ export function requireEnv(name) {
 // issue (via @include so the lookup is skipped when R1 already failed) and
 // the full check/status rollup of the head commit.
 const PR_BUNDLE_QUERY = /* GraphQL */ `
-  query PrBundle($owner: String!, $repo: String!, $pr: Int!, $issue: Int!, $checkIssue: Boolean!) {
+  query PrBundle(
+    $owner: String!
+    $repo: String!
+    $pr: Int!
+    $issue: Int!
+    $checkIssue: Boolean!
+    $issueRepo: String!
+    $checkIssueRepo: Boolean!
+  ) {
     repository(owner: $owner, name: $repo) {
       pullRequest(number: $pr) {
         id
@@ -57,6 +65,9 @@ const PR_BUNDLE_QUERY = /* GraphQL */ `
         closingIssuesReferences(first: 50) {
           nodes {
             number
+            repository {
+              nameWithOwner
+            }
           }
         }
         commits(last: 1) {
@@ -87,7 +98,24 @@ const PR_BUNDLE_QUERY = /* GraphQL */ `
           }
         }
       }
+      nameWithOwner
       issueOrPullRequest(number: $issue) @include(if: $checkIssue) {
+        __typename
+        ... on Issue {
+          number
+          title
+          state
+        }
+        ... on PullRequest {
+          number
+        }
+      }
+    }
+    # Zweites Repo für Repos, deren Tickets woanders liegen (Manifest-Repo -> Projekt-Repo).
+    # @include hält den Lookup aus dem Plan, solange niemand ihn konfiguriert hat.
+    issueRepository: repository(owner: $owner, name: $issueRepo) @include(if: $checkIssueRepo) {
+      nameWithOwner
+      issueOrPullRequest(number: $issue) {
         __typename
         ... on Issue {
           number
@@ -136,6 +164,20 @@ const MORE_CONTEXTS_QUERY = /* GraphQL */ `
     }
   }
 `
+
+/**
+ * Normalize one `issueOrPullRequest` lookup into the shape the rules expect.
+ * Returns null when the repository block is absent (skipped or not found) or
+ * the number does not resolve — the caller then tries the next candidate.
+ */
+function normalizeIssueNode(repositoryNode, nameWithOwner) {
+  const node = repositoryNode?.issueOrPullRequest
+  if (!node) return null
+  if (node.__typename === 'PullRequest') {
+    return { exists: true, isPullRequest: true, state: null, title: null, repo: nameWithOwner }
+  }
+  return { exists: true, isPullRequest: false, state: node.state, title: node.title, repo: nameWithOwner }
+}
 
 export class GitHubClient {
   #token
@@ -194,9 +236,14 @@ export class GitHubClient {
    * Fetch everything a guardrail run needs in one GraphQL roundtrip.
    * `issueNumber` may be null when the branch does not reference one — the
    * issue lookup is then skipped server-side via @include.
+   * `issueRepo` (optional, same owner) is a second repository the issue may
+   * live in — for repos whose tickets are tracked elsewhere, e.g. a manifest
+   * repo pointing at its project repo. It wins over the local lookup: a
+   * manifest repo rarely has issues of its own, and #123 exists in both.
    */
-  async fetchPrBundle({ prNumber, issueNumber }) {
+  async fetchPrBundle({ prNumber, issueNumber, issueRepo = null }) {
     const checkIssue = Number.isInteger(issueNumber) && issueNumber > 0
+    const checkIssueRepo = checkIssue && Boolean(issueRepo) && issueRepo !== this.repo
     const { data, errors } = await this.graphql(PR_BUNDLE_QUERY, {
       owner: this.owner,
       repo: this.repo,
@@ -204,14 +251,22 @@ export class GitHubClient {
       // The variable must validate as Int! even when @include skips the field.
       issue: checkIssue ? issueNumber : 1,
       checkIssue,
+      // Same: String! must validate even when the block is skipped.
+      issueRepo: checkIssueRepo ? issueRepo : this.repo,
+      checkIssueRepo,
     })
 
     const repository = data?.repository
     if (errors?.length) {
       // A NOT_FOUND on the issue lookup is an expected R2 outcome; anything
       // else is a real error.
+      // A missing issue — or a configured issue repo that does not exist at
+      // all — is an expected R2 outcome, not an API failure.
       const onlyIssueLookup = errors.every(
-        (e) => Array.isArray(e.path) && e.path[0] === 'repository' && e.path[1] === 'issueOrPullRequest',
+        (e) =>
+          Array.isArray(e.path) &&
+          ((e.path[0] === 'repository' && e.path[1] === 'issueOrPullRequest') ||
+            e.path[0] === 'issueRepository'),
       )
       if (!onlyIssueLookup) {
         throw new GitHubApiError('PR bundle query failed', { details: JSON.stringify(errors) })
@@ -237,14 +292,18 @@ export class GitHubClient {
       if (contexts) contextNodes.push(...contexts.nodes)
     }
 
-    const issueNode = checkIssue ? (repository?.issueOrPullRequest ?? null) : undefined
+    // Candidates in priority order: the configured issue repo first (a manifest
+    // repo rarely has issues of its own, and #123 exists in both), then the PR's
+    // own repo. A real issue wins over a number that resolves to a pull request,
+    // so a PR in the project repo does not mask a valid issue next door.
+    const candidates = [
+      normalizeIssueNode(data?.issueRepository, `${this.owner}/${issueRepo}`),
+      normalizeIssueNode(repository, `${this.owner}/${this.repo}`),
+    ].filter(Boolean)
     const issue = !checkIssue
       ? null
-      : issueNode === null
-        ? { exists: false, isPullRequest: false, state: null, title: null }
-        : issueNode.__typename === 'PullRequest'
-          ? { exists: true, isPullRequest: true, state: null, title: null }
-          : { exists: true, isPullRequest: false, state: issueNode.state, title: issueNode.title }
+      : (candidates.find((c) => !c.isPullRequest) ??
+        candidates[0] ?? { exists: false, isPullRequest: false, state: null, title: null, repo: null })
 
     return {
       pr: {
@@ -259,7 +318,10 @@ export class GitHubClient {
         authorLogin: prNode.author?.login ?? '',
         mergeable: prNode.mergeable ?? 'UNKNOWN',
         labels: (prNode.labels?.nodes ?? []).map((l) => l.name),
-        linkedIssueNumbers: (prNode.closingIssuesReferences?.nodes ?? []).map((n) => n.number),
+        linkedIssues: (prNode.closingIssuesReferences?.nodes ?? []).map((n) => ({
+          number: n.number,
+          repo: n.repository?.nameWithOwner ?? null,
+        })),
       },
       issue,
       checkContexts: contextNodes,
