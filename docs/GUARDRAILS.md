@@ -14,11 +14,11 @@ Caller (`.github/workflows/pr-guardrail.yml`), die Logik bleibt zentral.
 | Regel | Prüft | Bei Verstoß |
 |---|---|---|
 | **R1** | Branch heißt `issue/<nummer>` (case-insensitive, Suffix erlaubt: `issue/123-dam-import`) | Verstoß |
-| **R2** | Das Issue `<nummer>` existiert in **diesem** Repo und ist offen (`require-issue-open`, Default: an). Eine PR-Nummer zählt nicht als Issue. | Verstoß |
+| **R2** | Das Issue `<nummer>` existiert in **diesem** Repo und ist offen (`require-issue-open`, Default: an). Eine PR-Nummer zählt nicht als Issue. Repos, deren Tickets woanders geführt werden (Manifest-Repos), suchen zuerst dort — siehe `issue-repo-strip-suffix`. | Verstoß |
 | **R3** | Titel-Autofix: Besteht der PR-Titel nur aus dem Branchnamen, wird er durch `#<nummer> <Issue-Titel>` ersetzt. Andere Titel werden **nie** angefasst. | Reparatur, kein Verstoß |
 | **R4** | Die PR-Beschreibung enthält echten Fließtext (Default: mind. 50 Zeichen). HTML-Kommentare, Markdown-Überschriften und leere Checkboxen zählen nicht. | Verstoß |
 | **R5** | Alle Check-Runs und Commit-Statuses am Head-Commit sind grün, keine Merge-Konflikte. Laufende Checks lösen **nichts** aus — nur ein endgültiger Fehlschlag (`failure`, `cancelled`, `timed_out`) oder ein Konflikt zählt. | Verstoß |
-| **R6** | Fehlt eine Closing-Reference auf das Issue aus R1, hängt der Guardrail `Closes #<nummer>` an den PR-Body an (GitHub-Verknüpfung: Development-Sidebar, Projects-Automation). | Reparatur, kein Verstoß |
+| **R6** | Fehlt eine Closing-Reference auf das Issue aus R1, hängt der Guardrail `Closes #<nummer>` an den PR-Body an (GitHub-Verknüpfung: Development-Sidebar, Projects-Automation). Liegt das Issue in einem anderen Repo, qualifiziert: `Closes owner/repo#<nummer>`. | Reparatur, kein Verstoß |
 
 ## Was passiert bei einem Verstoß?
 
@@ -87,6 +87,38 @@ also von Anfang an. Umgestellt wird **zentral** in
 Änderung. Einzelne Repos oder Gruppen können abweichen, indem man ihnen in
 `.github/sync.yml` ein eigenes Template mit anderen Inputs zuweist.
 
+### Manifest-Repos: `templates/pr-guardrail-manifest.yml`
+
+Manifest-Repos (`<projekt>-manifest`, Kubernetes/ArgoCD) führen keine eigenen
+Tickets — die liegen im gleichnamigen Projekt-Repo. Der Caller setzt deshalb
+
+```yaml
+issue-repo-strip-suffix: '-manifest'
+```
+
+Damit sucht R2 das Issue aus dem Branch-Namen **zuerst im Projekt-Repo**
+(`bellaflora-manifest` → `bellaflora`) und erst danach im Manifest-Repo selbst.
+Die Reihenfolge ist wichtig, weil kleine Nummern in beiden Repos existieren
+können; das Projekt-Repo gewinnt. Der Branch bleibt `issue/<nummer>` — die
+Konvention ändert sich für Entwickler nicht.
+
+R6 ergänzt die Closing-Referenz dann **qualifiziert**
+(`Closes cors-gmbh/bellaflora#123`), weil ein nacktes `#123` auf das
+Manifest-Repo zeigen würde. Der Token bekommt zusätzlich Lesezugriff auf das
+Projekt-Repo (siehe Schritt „Resolve token repositories" im Reusable Workflow).
+
+In Gruppe 6 gehören nur Manifeste, deren **Projekt-Repo schon im Sync liegt**
+(Gruppe 1) — sonst verweist der Guardrail auf ein Repo, in dem keine Tickets
+geführt werden. Neue Projekte trägt der Skeleton-Workflow „Create project"
+automatisch in beide Gruppen ein.
+
+Repos ohne passendes Projekt-Repo (z. B. `zeroridge-manifest`) verhalten sich
+unverändert: der Lookup dort schlägt fehl und das Manifest-Repo selbst greift
+als Rückfallebene.
+
+Der Input funktioniert für jedes Repo mit dieser Struktur, nicht nur für
+Manifeste — ein anderer Suffix genügt.
+
 ### Öffentliche OSS-Repos: `templates/pr-guardrail-oss.yml`
 
 Für **öffentliche** Repos mit externen Contributors (Gruppe 5 in
@@ -148,7 +180,7 @@ automatisch aus dem App-Slug).
    `GH_APP_ID`/`GH_APP_PRIVATE_KEY` dort sichtbar sind (siehe oben).
 2. In [`.github/sync.yml`](../.github/sync.yml) das Repo in die passende
    Gruppe eintragen (Projekt-Repos, Bundle-Repos, Dev-/Infrastruktur-Repos,
-   sonstige Anwendungs-Repos oder öffentliche OSS-Repos). Achtung: innerhalb
+   sonstige Anwendungs-Repos, öffentliche OSS-Repos oder Manifest-Repos). Achtung: innerhalb
    der `repos: |`-Blöcke sind keine Kommentare möglich.
 3. Falls das Repo schon ein eigenes `PULL_REQUEST_TEMPLATE.md` im Root oder in
    `docs/` hat: dieses **löschen**, sonst konkurriert es mit dem gesyncten

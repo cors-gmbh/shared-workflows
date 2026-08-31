@@ -57,19 +57,36 @@ export function checkBranch({ branch, branchPattern = DEFAULT_CONFIG.branchPatte
 // --- R2: issue exists (and is open) -------------------------------------------
 
 /**
- * R2 — the issue referenced by the branch must exist in the same repository.
+ * R2 — the issue referenced by the branch must exist. It is looked up in this
+ * repository and, when the caller configured one, in a second repository that
+ * holds the tickets (manifest repo -> project repo).
  * `issue` is the normalized lookup result:
- *   { exists: boolean, isPullRequest: boolean, state: 'OPEN'|'CLOSED'|null, title: string|null }
+ *   { exists: boolean, isPullRequest: boolean, state: 'OPEN'|'CLOSED'|null,
+ *     title: string|null, repo: string|null }
  * A number that resolves to a pull request is NOT a valid issue.
+ * `searchedRepos` names the repositories that were searched, for the message.
  */
-export function checkIssue({ issueNumber, issue, requireIssueOpen = DEFAULT_CONFIG.requireIssueOpen }) {
+export function checkIssue({
+  issueNumber,
+  issue,
+  requireIssueOpen = DEFAULT_CONFIG.requireIssueOpen,
+  searchedRepos = [],
+}) {
+  // "in diesem Repository" is only true when nothing else was searched.
+  const where =
+    searchedRepos.length > 1
+      ? `in ${searchedRepos.join(' oder ')}`
+      : 'in diesem Repository'
+
   if (!issue || !issue.exists) {
     return {
       rule: 'R2',
       title: 'Verknüpftes Issue',
-      message: `Es gibt kein Issue #${issueNumber} in diesem Repository.`,
+      message: `Es gibt kein Issue #${issueNumber} ${where}.`,
       action:
-        'Lege zuerst das Ticket als Issue in diesem Repository an oder benenne den Branch nach einem existierenden Issue.',
+        searchedRepos.length > 1
+          ? `Lege das Ticket als Issue in ${searchedRepos[0]} an oder benenne den Branch nach einem existierenden Issue.`
+          : 'Lege zuerst das Ticket als Issue in diesem Repository an oder benenne den Branch nach einem existierenden Issue.',
     }
   }
   if (issue.isPullRequest) {
@@ -91,6 +108,18 @@ export function checkIssue({ issueNumber, issue, requireIssueOpen = DEFAULT_CONF
     }
   }
   return null
+}
+
+/**
+ * Repository holding this repo's tickets, or null when they live here.
+ * Convention instead of per-repo configuration: `bellaflora-manifest` with
+ * the suffix `-manifest` points at `bellaflora`, so one caller template can
+ * serve every manifest repo. Returns the bare name (same owner).
+ */
+export function issueRepoFor(repo, stripSuffix) {
+  if (!stripSuffix || !repo || !repo.endsWith(stripSuffix)) return null
+  const base = repo.slice(0, -stripSuffix.length)
+  return base === '' ? null : base
 }
 
 // --- R3: title autofix (a repair, not a violation) -----------------------------
@@ -258,8 +287,12 @@ export function checkCi({ checks = [], mergeable = 'UNKNOWN', ownCheckNames = []
 
 const CLOSING_KEYWORD = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+/i
 
-function hasClosingKeywordFor(body, issueNumber) {
-  const re = new RegExp(`${CLOSING_KEYWORD.source}#${issueNumber}\\b`, 'i')
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function hasClosingKeywordFor(body, reference) {
+  const re = new RegExp(`${CLOSING_KEYWORD.source}${escapeRegExp(reference)}\\b`, 'i')
   return re.test(body ?? '')
 }
 
@@ -268,12 +301,35 @@ function hasClosingKeywordFor(body, issueNumber) {
  * sidebar, Projects automation). If neither the resolved
  * closingIssuesReferences nor a closing keyword in the body reference the
  * issue, return the line to append; otherwise null.
+ *
+ * `issueRepo` is where the issue actually lives and `selfRepo` this PR's
+ * repository (both `owner/name`). They differ for repos whose tickets are
+ * tracked elsewhere; the reference then has to be qualified
+ * (`Closes cors-gmbh/bellaflora#123`), because a bare `#123` would point at
+ * this repository. `linkedIssues` are the already resolved closing
+ * references as { number, repo }.
  */
-export function closingReference({ body, issueNumber, linkedIssueNumbers = [] }) {
+export function closingReference({
+  body,
+  issueNumber,
+  issueRepo = null,
+  selfRepo = null,
+  linkedIssues = [],
+}) {
   if (!issueNumber) return null
-  if (linkedIssueNumbers.includes(issueNumber)) return null
-  if (hasClosingKeywordFor(body, issueNumber)) return null
-  return `Closes #${issueNumber}`
+
+  const crossRepo = Boolean(issueRepo) && Boolean(selfRepo) && issueRepo !== selfRepo
+  const reference = crossRepo ? `${issueRepo}#${issueNumber}` : `#${issueNumber}`
+  const targetRepo = issueRepo ?? selfRepo
+
+  // Match the repository too: #123 in another repo is a different ticket.
+  const alreadyLinked = linkedIssues.some(
+    (linked) =>
+      linked.number === issueNumber && (!targetRepo || !linked.repo || linked.repo === targetRepo),
+  )
+  if (alreadyLinked) return null
+  if (hasClosingKeywordFor(body, reference)) return null
+  return `Closes ${reference}`
 }
 
 // --- Bot detection --------------------------------------------------------------
@@ -304,7 +360,10 @@ export function isBotAuthor(login, bots = DEFAULT_CONFIG.bots) {
  * @param {Array}  facts.checks            normalized check states (see normalizeCheckContexts)
  * @param {string} facts.mergeable         'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN'
  * @param {string[]} facts.ownCheckNames   check-run names of the guardrail itself
- * @param {number[]} facts.linkedIssueNumbers  issues already linked via closing references
+ * @param {Array}  facts.linkedIssues     already linked issues as { number, repo }
+ * @param {string|null} facts.issueRepo    `owner/name` where the issue was found
+ * @param {string|null} facts.selfRepo     `owner/name` of this PR's repository
+ * @param {string[]} facts.searchedRepos   repositories searched for the issue (R2 message)
  * @param {object} config                  see DEFAULT_CONFIG
  *
  * @returns {{ isBot: boolean, issueNumber: number|null, violations: Array,
@@ -330,6 +389,7 @@ export function evaluate(facts, config = {}) {
         issueNumber,
         issue: facts.issue,
         requireIssueOpen: cfg.requireIssueOpen,
+        searchedRepos: facts.searchedRepos ?? [],
       })
       if (issueViolation) {
         violations.push(issueViolation)
@@ -345,7 +405,9 @@ export function evaluate(facts, config = {}) {
         appendClosing = closingReference({
           body: facts.body,
           issueNumber,
-          linkedIssueNumbers: facts.linkedIssueNumbers ?? [],
+          issueRepo: facts.issue?.repo ?? null,
+          selfRepo: facts.selfRepo ?? null,
+          linkedIssues: facts.linkedIssues ?? [],
         })
       }
     }

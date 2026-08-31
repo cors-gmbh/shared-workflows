@@ -57,6 +57,15 @@ on:
         type: string
         required: false
         default: 'guardrail-bypass'
+      issue-repo-strip-suffix:
+        description: >-
+          For repos whose tickets live in another repository: strip this suffix from the repo name
+          to get the ticket repo (same owner). Example: '-manifest' makes bellaflora-manifest look
+          up its issues in bellaflora. The ticket repo wins over the local lookup; a local issue
+          with the same number is the fallback. Empty = issues live in this repo only.
+        type: string
+        required: false
+        default: ''
     secrets:
       GH_APP_ID:
         description: "App ID of the CORS CD bot (org secret, pass via `secrets: inherit`)."
@@ -76,6 +85,23 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      # Which repos the token may touch. With issue-repo-strip-suffix the ticket
+      # repo joins the list — otherwise R2 cannot read the issue. Values come from
+      # the workflow context and the caller's input, never from PR content, and
+      # are passed through the environment instead of being interpolated.
+      - name: "🧮 Resolve token repositories"
+        id: repos
+        env:
+          REPO: ${{ github.event.repository.name }}
+          SUFFIX: ${{ inputs.issue-repo-strip-suffix }}
+        run: |
+          set -euo pipefail
+          list="$REPO,shared-workflows"
+          if [ -n "$SUFFIX" ] && [ "${REPO%"$SUFFIX"}" != "$REPO" ]; then
+            list="$list,${REPO%"$SUFFIX"}"
+          fi
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+
       - name: "🔑 Create app token"
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -83,8 +109,7 @@ jobs:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: >-
-            ${{ github.event.repository.name }},shared-workflows
+          repositories: ${{ steps.repos.outputs.list }}
 
       # Guardrail logic always comes from the base side: shared-workflows at
       # the exact commit of this reusable workflow (job_workflow_sha), so the
@@ -111,4 +136,5 @@ jobs:
           INPUT_BOTS: ${{ inputs.bots }}
           INPUT_BOT_REQUIRE_BODY: ${{ inputs.bot-require-body }}
           INPUT_BYPASS_LABEL: ${{ inputs.bypass-label }}
+          INPUT_ISSUE_REPO_STRIP_SUFFIX: ${{ inputs.issue-repo-strip-suffix }}
         run: node scripts/guardrails/run-guardrail.mjs

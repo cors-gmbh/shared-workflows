@@ -6,6 +6,7 @@ import {
   checkBranch,
   checkCi,
   checkIssue,
+  issueRepoFor,
   closingReference,
   evaluate,
   extractIssueNumber,
@@ -87,6 +88,7 @@ describe('R2: checkIssue', () => {
 
   it('flags a missing issue', () => {
     const v = checkIssue({ issueNumber: 999, issue: { exists: false }, requireIssueOpen: true })
+    assert.match(v.message, /in diesem Repository/)
     assert.equal(v.rule, 'R2')
     assert.match(v.message, /#999/)
   })
@@ -116,6 +118,21 @@ describe('R2: checkIssue', () => {
 // ---------------------------------------------------------------------------
 // R3 — title autofix
 // ---------------------------------------------------------------------------
+
+describe('R2: checkIssue across repositories', () => {
+  const searchedRepos = ['cors-gmbh/bellaflora', 'cors-gmbh/bellaflora-manifest']
+
+  it('names both repositories when the issue is missing', () => {
+    const v = checkIssue({ issueNumber: 999, issue: { exists: false }, searchedRepos })
+    assert.match(v.message, /cors-gmbh\/bellaflora oder cors-gmbh\/bellaflora-manifest/)
+    assert.match(v.action, /cors-gmbh\/bellaflora\b/)
+  })
+
+  it('accepts an open issue found in the other repository', () => {
+    const issue = { exists: true, isPullRequest: false, state: 'OPEN', title: 'T', repo: 'cors-gmbh/bellaflora' }
+    assert.equal(checkIssue({ issueNumber: 5, issue, requireIssueOpen: true, searchedRepos }), null)
+  })
+})
 
 describe('R3: titleAutofix', () => {
   const base = { issueNumber: 123, issueTitle: 'DAM Import bricht ab' }
@@ -326,7 +343,10 @@ describe('R6: closingReference', () => {
   })
 
   it('does not append when GitHub already resolved the link', () => {
-    assert.equal(closingReference({ body: '', issueNumber: 123, linkedIssueNumbers: [123] }), null)
+    assert.equal(
+      closingReference({ body: '', issueNumber: 123, linkedIssues: [{ number: 123, repo: null }] }),
+      null,
+    )
   })
 
   it('does not append when a closing keyword is present (any casing)', () => {
@@ -346,6 +366,66 @@ describe('R6: closingReference', () => {
 
   it('does nothing without an issue number', () => {
     assert.equal(closingReference({ body: '', issueNumber: null }), null)
+  })
+
+  // Cross-repo: the issue lives in the project repo, the PR in the manifest repo.
+  const crossRepo = {
+    issueNumber: 123,
+    issueRepo: 'cors-gmbh/bellaflora',
+    selfRepo: 'cors-gmbh/bellaflora-manifest',
+  }
+
+  it('qualifies the reference when the issue lives in another repository', () => {
+    assert.equal(
+      closingReference({ body: 'Beschreibung.', ...crossRepo }),
+      'Closes cors-gmbh/bellaflora#123',
+    )
+  })
+
+  it('accepts a qualified keyword that is already in the body', () => {
+    assert.equal(closingReference({ body: 'Closes cors-gmbh/bellaflora#123', ...crossRepo }), null)
+  })
+
+  it('does not accept a bare #123 as the cross-repo reference', () => {
+    // `#123` would point at the manifest repo, not at the ticket.
+    assert.equal(
+      closingReference({ body: 'Closes #123', ...crossRepo }),
+      'Closes cors-gmbh/bellaflora#123',
+    )
+  })
+
+  it('ignores a resolved link to the same number in a different repository', () => {
+    assert.equal(
+      closingReference({
+        body: '',
+        ...crossRepo,
+        linkedIssues: [{ number: 123, repo: 'cors-gmbh/etwas-anderes' }],
+      }),
+      'Closes cors-gmbh/bellaflora#123',
+    )
+    assert.equal(
+      closingReference({
+        body: '',
+        ...crossRepo,
+        linkedIssues: [{ number: 123, repo: 'cors-gmbh/bellaflora' }],
+      }),
+      null,
+    )
+  })
+})
+
+describe('issueRepoFor', () => {
+  it('strips the configured suffix', () => {
+    assert.equal(issueRepoFor('bellaflora-manifest', '-manifest'), 'bellaflora')
+  })
+
+  it('returns null without a suffix or for repos that do not carry it', () => {
+    assert.equal(issueRepoFor('bellaflora-manifest', ''), null)
+    assert.equal(issueRepoFor('bellaflora', '-manifest'), null)
+  })
+
+  it('returns null when nothing would be left of the name', () => {
+    assert.equal(issueRepoFor('-manifest', '-manifest'), null)
   })
 })
 

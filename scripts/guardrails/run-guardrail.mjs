@@ -9,7 +9,7 @@
 
 import { readFileSync } from 'node:fs'
 import { GitHubClient, requireEnv } from './github.mjs'
-import { DEFAULT_CONFIG, evaluate, extractIssueNumber, normalizeCheckContexts } from './rules.mjs'
+import { DEFAULT_CONFIG, evaluate, extractIssueNumber, issueRepoFor, normalizeCheckContexts } from './rules.mjs'
 import {
   MARKER,
   renderAuditComment,
@@ -40,6 +40,7 @@ function readConfig() {
       .filter(Boolean),
     botRequireBody: boolEnv('INPUT_BOT_REQUIRE_BODY', DEFAULT_CONFIG.botRequireBody),
     bypassLabel: env('INPUT_BYPASS_LABEL', DEFAULT_CONFIG.bypassLabel),
+    issueRepoStripSuffix: env('INPUT_ISSUE_REPO_STRIP_SUFFIX', ''),
   }
 }
 
@@ -65,7 +66,8 @@ async function resolvePrs({ api, eventName, event }) {
 async function processPr({ api, prRef, event, eventName, cfg, ownJobNames }) {
   const prNumber = prRef.number
   const issueNumber = extractIssueNumber(prRef.branch, cfg.branchPattern)
-  const bundle = await api.fetchPrBundle({ prNumber, issueNumber })
+  const issueRepo = issueRepoFor(api.repo, cfg.issueRepoStripSuffix)
+  const bundle = await api.fetchPrBundle({ prNumber, issueNumber, issueRepo })
   const { pr, issue } = bundle
 
   if (pr.state !== 'OPEN') {
@@ -119,7 +121,12 @@ async function processPr({ api, prRef, event, eventName, cfg, ownJobNames }) {
       checks: normalizeCheckContexts(bundle.checkContexts),
       mergeable: pr.mergeable,
       ownCheckNames: ownJobNames,
-      linkedIssueNumbers: pr.linkedIssueNumbers,
+      linkedIssues: pr.linkedIssues,
+      selfRepo: `${api.owner}/${api.repo}`,
+      // Order mirrors the lookup priority in fetchPrBundle.
+      searchedRepos: issueRepo
+        ? [`${api.owner}/${issueRepo}`, `${api.owner}/${api.repo}`]
+        : [`${api.owner}/${api.repo}`],
     },
     cfg,
   )
