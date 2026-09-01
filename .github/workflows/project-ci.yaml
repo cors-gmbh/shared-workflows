@@ -42,6 +42,16 @@ on:
         required: false
         type: boolean
         default: true
+      symfony-lsp:
+        description: "Run symfony lsp:check (Symfony-aware diagnostics: routes, templates, translations, services, config)"
+        required: false
+        type: boolean
+        default: false
+      symfony-lsp-args:
+        description: "Extra arguments for symfony lsp:check (e.g. paths, --source-only, --baseline=...)"
+        required: false
+        type: string
+        default: ""
       # --- Build (forwarded to containerize.yaml) ---
       build:
         description: "Build & push a container image on push (after tests)"
@@ -128,6 +138,8 @@ jobs:
       lint-twig: ${{ inputs.lint-twig }}
       lint-yaml: ${{ inputs.lint-yaml }}
       lint-container: ${{ inputs.lint-container }}
+      symfony-lsp: ${{ inputs.symfony-lsp }}
+      symfony-lsp-args: ${{ inputs.symfony-lsp-args }}
     secrets:
       composer_auth: ${{ secrets.composer_auth }}
       composer_auth_extra: ${{ secrets.composer_auth_extra }}
