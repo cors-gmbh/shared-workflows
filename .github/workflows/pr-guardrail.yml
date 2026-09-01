@@ -3,7 +3,7 @@ name: "🚦 PR Guardrail"
 # Reusable PR guardrail for all CORS project and bundle repos.
 #
 # Called via workflow_call from the synced caller workflow
-# (templates/pr-guardrail.yml).
+# (templates/pr-guardrail.yml in cors-gmbh/shared-workflows-private).
 # The caller defines the actual triggers (pull_request_target, check_suite,
 # status) — inside a reusable workflow the `github` context carries the
 # caller's event, so this file can stay trigger-agnostic.
