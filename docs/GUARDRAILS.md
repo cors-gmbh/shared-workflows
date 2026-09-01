@@ -7,7 +7,7 @@ Caller (`.github/workflows/pr-guardrail.yml`), die Logik bleibt zentral.
 
 - Reusable Workflows: [`pr-guardrail.yml`](../.github/workflows/pr-guardrail.yml), [`pr-to-project.yml`](../.github/workflows/pr-to-project.yml)
 - Regel-Logik + Tests: [`scripts/guardrails/`](../scripts/guardrails/)
-- Verteilung: [`sync-files.yml`](../.github/workflows/sync-files.yml) mit Konfiguration in [`.github/sync.yml`](../.github/sync.yml)
+- Verteilung: `sync-files.yml` mit Konfiguration `sync.yml` und den Caller-Templates in [`cors-gmbh/shared-workflows-private`](https://github.com/cors-gmbh/shared-workflows-private) — die Repo-Liste ist Kundeninformation und liegt deshalb nicht in diesem öffentlichen Repo
 
 ## Die Regeln
 
@@ -83,9 +83,10 @@ wieder normal.
 
 Die synchronisierten Caller stehen auf `enforce: true` — Verstöße blockieren
 also von Anfang an. Umgestellt wird **zentral** in
-`templates/pr-guardrail.yml` in diesem Repo — der nächste Sync verteilt die
-Änderung. Einzelne Repos oder Gruppen können abweichen, indem man ihnen in
-`.github/sync.yml` ein eigenes Template mit anderen Inputs zuweist.
+`templates/pr-guardrail.yml` in `shared-workflows-private` — der nächste Sync
+verteilt die Änderung. Einzelne Repos oder Gruppen können abweichen, indem man
+ihnen in der dortigen `sync.yml` ein eigenes Template mit anderen Inputs
+zuweist.
 
 ### Manifest-Repos: `templates/pr-guardrail-manifest.yml`
 
@@ -178,8 +179,8 @@ automatisch aus dem App-Slug).
 
 1. Prüfen, dass die **App im Ziel-Repo installiert** ist und die Org-Secrets
    `GH_APP_ID`/`GH_APP_PRIVATE_KEY` dort sichtbar sind (siehe oben).
-2. In [`.github/sync.yml`](../.github/sync.yml) das Repo in die passende
-   Gruppe eintragen (Projekt-Repos, Bundle-Repos, Dev-/Infrastruktur-Repos,
+2. In `.github/sync.yml` in [`shared-workflows-private`](https://github.com/cors-gmbh/shared-workflows-private)
+   das Repo in die passende Gruppe eintragen (Projekt-Repos, Bundle-Repos, Dev-/Infrastruktur-Repos,
    sonstige Anwendungs-Repos, öffentliche OSS-Repos oder Manifest-Repos). Achtung: innerhalb
    der `repos: |`-Blöcke sind keine Kommentare möglich.
 3. Falls das Repo schon ein eigenes `PULL_REQUEST_TEMPLATE.md` im Root oder in
@@ -224,4 +225,4 @@ Skripte sind damit immer konsistent versioniert.
 | Kommentar erscheint nicht, Job grün | PR ist Draft (wird übersprungen) oder CI läuft noch (R5 wartet). |
 | Bypass-Label wird sofort entfernt | Absender hat weder `admin` noch `maintain` — so soll es sein. |
 | Collaborator-Check antwortet 403 | App-Permission „Administration: Read“ ergänzen. |
-| Sync-PR fehlt im Ziel-Repo | Repo in `.github/sync.yml` eingetragen? Lauf von `sync-files.yml` prüfen (Push auf `main` mit Template-Änderung oder `workflow_dispatch`). |
+| Sync-PR fehlt im Ziel-Repo | Repo in der `sync.yml` von `shared-workflows-private` eingetragen? Lauf von `sync-files.yml` dort prüfen (Push auf `main` mit Template-Änderung oder `workflow_dispatch`). |

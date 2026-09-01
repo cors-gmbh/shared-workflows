@@ -14,7 +14,7 @@ Reusable GitHub Actions workflows for CORS Pimcore projects and bundles.
 | `frontend-build.yaml` | — | Build Pimcore Studio frontend (Rsbuild), type-check, commit assets |
 | `pr-guardrail.yml` | — | PR guardrails: branch/issue conventions, description, CI state ([docs](docs/GUARDRAILS.md)) |
 | `pr-to-project.yml` | — | Add PRs to the Projects-V2 boards of their linked issues |
-| `sync-files.yml` | — | Distribute guardrail callers + PR template to org repos (config: `.github/sync.yml`) |
+| `sync-files.yml` | — | Lebt in [`shared-workflows-private`](https://github.com/cors-gmbh/shared-workflows-private): verteilt Guardrail-Caller, PR-Template und Dependency-Update-Caller in die Org-Repos (Konfiguration und Templates dort — die Repo-Liste bleibt privat) |
 
 ## Quick Start
 

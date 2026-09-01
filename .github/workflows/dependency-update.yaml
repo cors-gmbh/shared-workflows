@@ -56,6 +56,11 @@ on:
         required: false
         type: string
         default: "dependencies"
+      assignees:
+        description: "Comma-separated GitHub logins assigned to the PR (e.g. the project lead)"
+        required: false
+        type: string
+        default: ""
     secrets:
       composer_auth:
         required: false
@@ -161,6 +166,7 @@ jobs:
           title: "Update dependencies"
           body: ${{ steps.summary.outputs.body }}
           labels: ${{ inputs.labels }}
+          assignees: ${{ inputs.assignees }}
           add-paths: |
             composer.lock
             ${{ inputs.npm-dir != '' && format('{0}/package-lock.json', inputs.npm-dir) || '' }}
