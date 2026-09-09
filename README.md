@@ -137,6 +137,22 @@ Two things the consuming repo has to get right:
 - **Build id from the sources.** The build has to derive its output directory
   from a hash of the sources, not from a random uuid — otherwise every run
   rewrites every asset path and commits a diff that contains no real change.
+- **Prefer the build archive model.** Since `@pimcore/studio-ui-bundle` 2026.2
+  (and 2025.4.12) Pimcore ships `studio-package-build`, which packages a build
+  directory carrying a `.build-id` file into `Resources/build-dist/build-<id>.zip`
+  and keeps the archive of an unchanged id untouched. The expanded build under
+  `Resources/public/studio` stays gitignored and is extracted at cache warmup
+  by Pimcore's `BuildArchiveExtractor`: the bundle's `WebpackEntryPointProvider`
+  implements `BuildArchiveProviderInterface` through `BuildArchiveExtractionTrait`
+  and points at the archive glob and the target directory. With that model the
+  repository tracks one small zip per bundle instead of hundreds of asset files,
+  and this workflow commits only when a build id actually changed. Call it with
+  `file-pattern: 'src/Resources/build-dist/*'` (a git pathspec — `*` also
+  matches `/`, so a monorepo can pass `bundles/*/Resources/build-dist/*`) and
+  list only the Studio sources and the build configuration under `paths` of the
+  `push` trigger, so the archive commit never starts another run. Reference:
+  [cors-gmbh/pimcore-legacy-bundles](https://github.com/cors-gmbh/pimcore-legacy-bundles)
+  and the CoreShop bundles.
 - **Push access to the release branch.** Where a ruleset requires pull requests,
   `GITHUB_TOKEN` cannot push. Passing `gh_app_id`/`gh_app_private_key` (the CORS
   CD Bot) makes the commit with the app's installation token instead; the app is
