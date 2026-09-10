@@ -91,6 +91,14 @@ Call it twice: pull requests verify only (`commit: false`), so their diffs stay
 limited to the actual source changes, and the assets are committed once per push
 to the release branch (`commit: true`, the default).
 
+The Studio bundle repos do not write this caller themselves: the file sync in
+`shared-workflows-private` distributes one `frontend-build.yaml` to every repo of
+the Studio bundle group. That caller fits every layout because the workflow
+resolves the npm project directory itself (`working-directory`: repository root
+or `assets/`) and stages the build archives with the default pathspec
+`*build-dist/*`. A repo only has to provide `npm run build` that produces
+`Resources/build-dist/build-<id>.zip` (see below).
+
 ```yaml
 name: Studio Frontend Build
 

@@ -45,13 +45,24 @@ on:
         required: false
         type: string
         default: "npm run build"
+      working-directory:
+        description: >-
+          Directory of the npm project (package.json, rsbuild config). Left empty, it is
+          resolved: the repository root when it holds a package.json, otherwise `assets/`. The
+          synced caller relies on this so one file fits every bundle layout.
+        required: false
+        type: string
+        default: ""
       file-pattern:
         description: >-
-          Pathspec of the built assets. Passed to `git add --all`, so deletions of stale build
-          directories are staged too — use a directory pattern such as
-          'src/Resources/public/studio/build/*' rather than a '/**' glob.
-        required: true
+          Git pathspec of the built assets. Passed to `git add --all`, so deletions of stale
+          build output are staged too — use a directory pattern such as
+          'src/Resources/build-dist/*' rather than a '/**' glob. `*` also matches `/` in a
+          pathspec, so the default covers every layout of the build archive model
+          (Resources/build-dist/build-<id>.zip next to Resources/public).
+        required: false
         type: string
+        default: "*build-dist/*"
       commit:
         description: >-
           Commit the built assets back to the branch. Set this to false for pull request builds,
@@ -90,20 +101,59 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      - name: Resolve the npm project directory
+        id: dir
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          DIR="$WORKING_DIRECTORY"
+          if [ -z "$DIR" ]; then
+            if [ -f package.json ]; then
+              DIR='.'
+            elif [ -f assets/package.json ]; then
+              DIR='assets'
+            else
+              echo "::error::No package.json in the repository root or in assets/ — pass working-directory."
+              exit 1
+            fi
+          fi
+          echo "dir=${DIR}" >> "$GITHUB_OUTPUT"
+          echo "npm project: \`${DIR}\`" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           cache: 'npm'
+          cache-dependency-path: ${{ steps.dir.outputs.dir }}/package-lock.json
 
       - name: Install dependencies
+        working-directory: ${{ steps.dir.outputs.dir }}
         run: ${{ inputs.install-command }}
 
       - name: Run esbuild install script
         if: ${{ inputs.rebuild-esbuild }}
+        working-directory: ${{ steps.dir.outputs.dir }}
         run: npm rebuild esbuild
 
+      # A repo without a check-types script (and the default command) has nothing to check;
+      # the synced caller cannot know that per repo, so the step decides here.
+      - name: Check whether a type check is defined
+        id: scripts
+        working-directory: ${{ steps.dir.outputs.dir }}
+        env:
+          CHECK_TYPES_COMMAND: ${{ inputs.check-types-command }}
+        run: |
+          if [ "$CHECK_TYPES_COMMAND" != "npm run check-types" ] || node -e 'process.exit(require("./package.json").scripts?.["check-types"] ? 0 : 1)'; then
+            echo 'defined=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'defined=false' >> "$GITHUB_OUTPUT"
+            echo 'No check-types script in package.json — type check skipped.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Run type checks
+        if: ${{ steps.scripts.outputs.defined == 'true' }}
+        working-directory: ${{ steps.dir.outputs.dir }}
         run: ${{ inputs.check-types-command }}
 
   # No job-level `permissions` block: the job inherits what the calling workflow grants, so the
@@ -148,28 +198,51 @@ jobs:
           # in the commit step rather than silently skipping the assets.
           token: ${{ steps.app-token.outputs.token || github.token }}
 
+      - name: Resolve the npm project directory
+        id: dir
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          DIR="$WORKING_DIRECTORY"
+          if [ -z "$DIR" ]; then
+            if [ -f package.json ]; then
+              DIR='.'
+            elif [ -f assets/package.json ]; then
+              DIR='assets'
+            else
+              echo "::error::No package.json in the repository root or in assets/ — pass working-directory."
+              exit 1
+            fi
+          fi
+          echo "dir=${DIR}" >> "$GITHUB_OUTPUT"
+          echo "npm project: \`${DIR}\`" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           cache: 'npm'
+          cache-dependency-path: ${{ steps.dir.outputs.dir }}/package-lock.json
 
       - name: Cache Rsbuild build cache
         uses: actions/cache@v6
         with:
-          path: node_modules/.cache/rsbuild
-          key: rsbuild-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          path: ${{ steps.dir.outputs.dir }}/node_modules/.cache/rsbuild
+          key: rsbuild-${{ hashFiles('**/package-lock.json') }}-${{ github.sha }}
           restore-keys: |
-            rsbuild-${{ hashFiles('package-lock.json') }}-
+            rsbuild-${{ hashFiles('**/package-lock.json') }}-
 
       - name: Install dependencies
+        working-directory: ${{ steps.dir.outputs.dir }}
         run: ${{ inputs.install-command }}
 
       - name: Run esbuild install script
         if: ${{ inputs.rebuild-esbuild }}
+        working-directory: ${{ steps.dir.outputs.dir }}
         run: npm rebuild esbuild
 
       - name: Run production build
+        working-directory: ${{ steps.dir.outputs.dir }}
         run: ${{ inputs.build-command }}
 
       # `git add --all` also stages deletions of stale build directories. A glob passed to
