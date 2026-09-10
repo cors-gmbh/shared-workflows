@@ -136,7 +136,23 @@ jobs:
         working-directory: ${{ steps.dir.outputs.dir }}
         run: npm rebuild esbuild
 
+      # A repo without a check-types script (and the default command) has nothing to check;
+      # the synced caller cannot know that per repo, so the step decides here.
+      - name: Check whether a type check is defined
+        id: scripts
+        working-directory: ${{ steps.dir.outputs.dir }}
+        env:
+          CHECK_TYPES_COMMAND: ${{ inputs.check-types-command }}
+        run: |
+          if [ "$CHECK_TYPES_COMMAND" != "npm run check-types" ] || node -e 'process.exit(require("./package.json").scripts?.["check-types"] ? 0 : 1)'; then
+            echo 'defined=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'defined=false' >> "$GITHUB_OUTPUT"
+            echo 'No check-types script in package.json — type check skipped.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Run type checks
+        if: ${{ steps.scripts.outputs.defined == 'true' }}
         working-directory: ${{ steps.dir.outputs.dir }}
         run: ${{ inputs.check-types-command }}
 
