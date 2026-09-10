@@ -8,13 +8,14 @@ Reusable GitHub Actions workflows for CORS Pimcore projects and bundles.
 
 | Workflow | Replaces (GitLab) | Description |
 |---|---|---|
+| `project-ci.yaml` | `.project-gitlab-ci.yml` include | Test → Build → Manifest für Pimcore-Projekte in einem Aufruf. Der Caller `ci.yaml` ist in allen Projekt-Repos identisch (File-Sync); Registry-Pfad und Manifest-Repo werden aus dem Repo-Namen abgeleitet, Overrides per Repo-Variablen `GCP_REGISTRY_PATH`, `CD_REPO`, `NGINX_VERSION` |
 | `php-test.yaml` | `test` stage (project + bundle) | ECS, PHPStan, Psalm, Twig/YAML/Container lint, Helm lint |
 | `containerize.yaml` | `build_and_push` stage | Multi-target Docker build, GHCR or GCP registry |
 | `update-manifest.yaml` | `update_manifest` stage | CD repo update via yq or helm template (GitOps) |
 | `frontend-build.yaml` | — | Build Pimcore Studio frontend (Rsbuild), type-check, commit assets |
 | `pr-guardrail.yml` | — | PR guardrails: branch/issue conventions, description, CI state ([docs](docs/GUARDRAILS.md)) |
 | `pr-to-project.yml` | — | Add PRs to the Projects-V2 boards of their linked issues |
-| `sync-files.yml` | — | Lebt in [`shared-workflows-private`](https://github.com/cors-gmbh/shared-workflows-private): verteilt Guardrail-Caller, PR-Template und Dependency-Update-Caller in die Org-Repos (Konfiguration und Templates dort — die Repo-Liste bleibt privat) |
+| `sync-files.yml` | — | Lebt in [`shared-workflows-private`](https://github.com/cors-gmbh/shared-workflows-private): verteilt Guardrail-Caller, PR-Template, CI-Caller (`ci.yaml`) und Dependency-Update-Caller in die Org-Repos (Konfiguration und Templates dort — die Repo-Liste bleibt privat) |
 
 ## Quick Start
 
