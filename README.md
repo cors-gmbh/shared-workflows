@@ -9,7 +9,7 @@ Reusable GitHub Actions workflows for CORS Pimcore projects and bundles.
 | Workflow | Replaces (GitLab) | Description |
 |---|---|---|
 | `php-test.yaml` | `test` stage (project + bundle) | ECS, PHPStan, Psalm, Twig/YAML/Container lint, Helm lint |
-| `containerize.yaml` | `build_and_push` stage | Multi-target Docker build, GHCR or GCP registry |
+| `containerize.yaml` | `build_and_push` stage | Multi-target Docker build, GHCR or GCP registry; targets missing from the Dockerfile are skipped (pimcore-docker 9.x and 10.x projects) |
 | `update-manifest.yaml` | `update_manifest` stage | CD repo update via yq or helm template (GitOps) |
 | `frontend-build.yaml` | — | Build Pimcore Studio frontend (Rsbuild), type-check, commit assets |
 | `pr-guardrail.yml` | — | PR guardrails: branch/issue conventions, description, CI state ([docs](docs/GUARDRAILS.md)) |

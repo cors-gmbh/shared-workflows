@@ -40,7 +40,11 @@ on:
         default: ""
       # --- Build targets ---
       targets:
-        description: 'JSON array of build targets, e.g. [{"target":"cors_php","image":"php-alpine-fpm"},...]'
+        description: >-
+          JSON array of build targets, e.g. [{"target":"cors_php","image":"php-alpine-fpm"},...].
+          Targets whose stage does not exist in the Dockerfile are skipped, so the default
+          covers both the pimcore-docker 9.x layout (fpm, blackfire, supervisord, cli, nginx)
+          and the 10.x layout (one cors_php image plus nginx).
         required: false
         type: string
         default: >-
@@ -264,8 +268,27 @@ jobs:
           echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
           echo "Composed composer auth from $(jq -rn --argjson a "${BASE:-{\}}" '($a["http-basic"]//{}|keys|length)') base + $(jq -rn --argjson b "${EXTRA:-{\}}" '($b["http-basic"]//{}|keys|length)') extra host(s)"
 
+      # --- Skip targets the project Dockerfile does not define ---
+      # pimcore-docker >= 10.0 ships one PHP image for fpm, cli, supervisord and
+      # blackfire, so those projects only have a cors_php stage. Older projects
+      # still define all four. Building a missing stage would fail the job.
+      - name: Check target stage
+        id: stage
+        env:
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          TARGET: ${{ matrix.target }}
+          IMAGE_NAME: ${{ matrix.image }}
+        run: |
+          if grep -qiE "^FROM[[:space:]].*[[:space:]]AS[[:space:]]+${TARGET}[[:space:]]*(#.*)?$" "$DOCKERFILE"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Stage '${TARGET}' not found in ${DOCKERFILE}, skipping image ${IMAGE_NAME}"
+          fi
+
       # --- Build & Push ---
       - name: Build and Push ${{ matrix.image }}
+        if: steps.stage.outputs.exists == 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
