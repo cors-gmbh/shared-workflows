@@ -211,6 +211,27 @@ Two things the consuming repo has to get right:
 - `CD_PUSH_TOKEN` — PAT with write access to the CD/manifest repo
 - OR: configure a GitHub App and set `GH_APP_ID` (variable) + `GH_APP_PRIVATE_KEY` (secret)
 
+## Migration scripts
+
+`scripts/migrations/` holds one-off migrations that are applied per project repo and open a PR there.
+
+### `pimcore-docker-10.py` — pimcore-docker 9.x → 10.x
+
+pimcore-docker 10.0 ships one `pimcore` image instead of php-fpm / php-cli / php-supervisord /
+php-fpm-blackfire, and pimcore-chart ≥ 6.1 runs the messenger consumers as one Deployment per queue
+group. The script rewrites a project and its manifest repo accordingly (Dockerfile stages, `.env`,
+`supervisord.conf`, `Chart.yaml`, `values*.yaml`) and generates `consumers.workers` from the project's
+`.docker/supervisord.conf`. Line based, dry run by default, refuses to write when the project is on a
+PHP version 10.x does not ship.
+
+```sh
+scripts/migrations/pimcore-docker-10.py ../bellaflora --manifest ../bellaflora-manifest            # dry run
+scripts/migrations/pimcore-docker-10.py ../bellaflora --manifest ../bellaflora-manifest --write
+```
+
+Anything that does not match the skeleton layout is listed under `MANUAL` instead of being guessed.
+Merge the manifest PR first (chart 6.1 works with the old image), then the project PR on `staging`.
+
 ## Repo access
 
 For **private** repos calling these workflows, enable access in this repo:
