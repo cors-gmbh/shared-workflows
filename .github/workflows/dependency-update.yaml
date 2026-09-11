@@ -1,9 +1,14 @@
 name: "🔄 Dependency update"
 
 # Reusable: runs `composer update` (and optionally `npm update` in a directory)
-# inside the project's php-cli image (versions from .env) and opens / refreshes
+# inside the project's PHP image (versions from .env) and opens / refreshes
 # a PR from branch `deps/update`. Nothing is pushed to the default branch — CI
 # has to pass and a human merges.
+#
+# With docker-base-update (default: on) the workflow also bumps DOCKER_BASE_IMAGE
+# in .env to the newest pimcore-docker release of the SAME major (10.0.0 -> 10.0.3,
+# never 9.x -> 10.x; majors need the migration script) and runs the updates
+# inside that new image, so composer.lock is validated against it.
 #
 # The PR is created with the org GitHub App token (GH_APP_ID / GH_APP_PRIVATE_KEY),
 # so CI runs on it (PRs created with GITHUB_TOKEN never trigger workflows) and the
@@ -29,6 +34,11 @@ on:
         default: ".env"
       composer:
         description: "Run composer update"
+        required: false
+        type: boolean
+        default: true
+      docker-base-update:
+        description: "Bump DOCKER_BASE_IMAGE in .env to the newest pimcore-docker release of the same major"
         required: false
         type: boolean
         default: true
@@ -77,20 +87,44 @@ permissions:
 
 jobs:
   versions:
-    name: "Resolve php-cli image"
+    name: "Resolve PHP image"
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
       php-image: ${{ steps.env.outputs.php_image }}
+      base-current: ${{ steps.env.outputs.base_current }}
+      base-target: ${{ steps.env.outputs.base_target }}
     steps:
       - uses: actions/checkout@v7
       - id: env
         env:
           ENV_FILE: ${{ inputs.env-file }}
+          BASE_UPDATE: ${{ inputs.docker-base-update }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -a; . "./$ENV_FILE"; set +a
           : "${DOCKER_PHP_VERSION:?missing in $ENV_FILE}" "${DOCKER_ALPINE_VERSION:?missing}" "${DOCKER_BASE_IMAGE:?missing}"
-          echo "php_image=ghcr.io/cors-gmbh/pimcore-docker/php-cli:${DOCKER_PHP_VERSION}-alpine${DOCKER_ALPINE_VERSION}-${DOCKER_BASE_IMAGE}" >> "$GITHUB_OUTPUT"
+
+          major="${DOCKER_BASE_IMAGE%%.*}"
+          target="$DOCKER_BASE_IMAGE"
+          # Only pinned releases (x.y.z) are bumped; moving tags like 10.0-LATEST stay as they are.
+          if [ "$BASE_UPDATE" = "true" ] && printf '%s' "$DOCKER_BASE_IMAGE" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            latest="$(gh api "repos/cors-gmbh/pimcore-docker/releases?per_page=100" \
+              --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
+              | grep -E "^${major}\.[0-9]+\.[0-9]+$" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
+            if [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "$DOCKER_BASE_IMAGE" "$latest" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" = "$latest" ]; then
+              target="$latest"
+            fi
+          fi
+          [ "$target" != "$DOCKER_BASE_IMAGE" ] && echo "DOCKER_BASE_IMAGE: $DOCKER_BASE_IMAGE -> $target"
+
+          # pimcore-docker >= 10 ships one image (pimcore-slim is enough for composer/npm), 9.x has php-cli
+          if [ "$major" -ge 10 ]; then image="pimcore-slim"; else image="php-cli"; fi
+          {
+            echo "php_image=ghcr.io/cors-gmbh/pimcore-docker/${image}:${DOCKER_PHP_VERSION}-alpine${DOCKER_ALPINE_VERSION}-${target}"
+            echo "base_current=$DOCKER_BASE_IMAGE"
+            echo "base_target=$target"
+          } >> "$GITHUB_OUTPUT"
 
   update:
     name: "composer update / npm update"
@@ -118,6 +152,13 @@ jobs:
           echo "::add-mask::$merged"
           echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
 
+      - name: Bump DOCKER_BASE_IMAGE
+        if: needs.versions.outputs.base-target != needs.versions.outputs.base-current
+        env:
+          ENV_FILE: ${{ inputs.env-file }}
+          TARGET: ${{ needs.versions.outputs.base-target }}
+        run: sed -i -E "s/^(DOCKER_BASE_IMAGE=).*/\1${TARGET}/" "$ENV_FILE"
+
       - name: composer update
         if: inputs.composer
         env:
@@ -138,13 +179,20 @@ jobs:
         id: summary
         env:
           NPM_DIR: ${{ inputs.npm-dir }}
+          ENV_FILE: ${{ inputs.env-file }}
+          BASE_CURRENT: ${{ needs.versions.outputs.base-current }}
+          BASE_TARGET: ${{ needs.versions.outputs.base-target }}
         run: |
           {
             echo 'body<<EOF'
             echo 'Automatisches Dependency-Update (`composer update`'"${NPM_DIR:+ + \`npm update\` in \`$NPM_DIR\`}"'), erstellt vom Shared Workflow `dependency-update`.'
+            if [ "$BASE_TARGET" != "$BASE_CURRENT" ]; then
+              echo
+              echo "Basisimage: pimcore-docker \`$BASE_CURRENT\` → \`$BASE_TARGET\` (\`DOCKER_BASE_IMAGE\` in \`$ENV_FILE\`); composer/npm liefen bereits im neuen Image."
+            fi
             echo
             echo '```'
-            git diff --stat -- composer.lock ${NPM_DIR:+"$NPM_DIR/package-lock.json"} || true
+            git diff --stat -- "$ENV_FILE" composer.lock ${NPM_DIR:+"$NPM_DIR/package-lock.json"} || true
             echo '```'
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
@@ -168,5 +216,6 @@ jobs:
           labels: ${{ inputs.labels }}
           assignees: ${{ inputs.assignees }}
           add-paths: |
+            ${{ inputs.env-file }}
             composer.lock
             ${{ inputs.npm-dir != '' && format('{0}/package-lock.json', inputs.npm-dir) || '' }}
