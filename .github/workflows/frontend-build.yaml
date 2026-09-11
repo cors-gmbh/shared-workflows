@@ -253,6 +253,14 @@ jobs:
         env:
           FILE_PATTERN: ${{ inputs.file-pattern }}
         run: |
+          # A pathspec that matches nothing makes `git add` exit 128 with a cryptic message; say
+          # what is actually wrong: the build did not produce what the caller stages (a repo that
+          # still emits the expanded build while the caller stages `*build-dist/*`, for instance).
+          if [ -z "$(git ls-files --cached --others --exclude-standard -- "$FILE_PATTERN")" ] \
+             && [ -z "$(git ls-files --cached --others --ignored --exclude-standard -- "$FILE_PATTERN")" ]; then
+            echo "::error::Nothing matches file-pattern '${FILE_PATTERN}' after the build. The build command has to produce the files this workflow stages (build archive model: Resources/build-dist/build-<id>.zip via studio-package-build)."
+            exit 1
+          fi
           git add --all --force -- "$FILE_PATTERN"
           if git diff --cached --quiet; then
             echo 'changed=false' >> "$GITHUB_OUTPUT"
