@@ -167,6 +167,7 @@ jobs:
           # COMPOSER_AUTH for all following steps. One authoritative source — no
           # ambiguity between env and auth.json file precedence.
           merged=$(jq -cn --argjson a "${BASE:-{\}}" --argjson b "${EXTRA:-{\}}" '$a * $b')
+          echo "::add-mask::$merged"
           echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
           echo "Composed COMPOSER_AUTH from $(jq -rn --argjson a "${BASE:-{\}}" '($a["http-basic"]//{}|keys|length)') base + $(jq -rn --argjson b "${EXTRA:-{\}}" '($b["http-basic"]//{}|keys|length)') extra host(s)"
 
@@ -270,6 +271,7 @@ jobs:
           # COMPOSER_AUTH for all following steps. One authoritative source — no
           # ambiguity between env and auth.json file precedence.
           merged=$(jq -cn --argjson a "${BASE:-{\}}" --argjson b "${EXTRA:-{\}}" '$a * $b')
+          echo "::add-mask::$merged"
           echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
           echo "Composed COMPOSER_AUTH from $(jq -rn --argjson a "${BASE:-{\}}" '($a["http-basic"]//{}|keys|length)') base + $(jq -rn --argjson b "${EXTRA:-{\}}" '($b["http-basic"]//{}|keys|length)') extra host(s)"
 
@@ -355,6 +357,7 @@ jobs:
           # COMPOSER_AUTH for all following steps. One authoritative source — no
           # ambiguity between env and auth.json file precedence.
           merged=$(jq -cn --argjson a "${BASE:-{\}}" --argjson b "${EXTRA:-{\}}" '$a * $b')
+          echo "::add-mask::$merged"
           echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
           echo "Composed COMPOSER_AUTH from $(jq -rn --argjson a "${BASE:-{\}}" '($a["http-basic"]//{}|keys|length)') base + $(jq -rn --argjson b "${EXTRA:-{\}}" '($b["http-basic"]//{}|keys|length)') extra host(s)"
 
