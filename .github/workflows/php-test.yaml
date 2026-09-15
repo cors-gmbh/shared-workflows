@@ -297,6 +297,7 @@ jobs:
           APP_ENV: dev
 
       - name: Warm up cache
+        if: inputs.pimcore
         run: bin/console cache:warmup --env=dev
         env:
           APP_ENV: dev
