@@ -42,7 +42,7 @@ on:
       targets:
         description: >-
           JSON array of build targets, e.g. [{"target":"cors_php","image":"php-alpine-fpm"},...].
-          Targets whose stage does not exist in the Dockerfile are skipped, so the default
+          Targets whose stage does not exist in the Dockerfile are dropped before any runner starts, so the default
           covers both the pimcore-docker 9.x layout (fpm, blackfire, supervisord, cli, nginx)
           and the 10.x layout (one cors_php image plus nginx).
         required: false
@@ -55,6 +55,22 @@ on:
             {"target":"cors_php_cli","image":"php-alpine-cli"},
             {"target":"cors_nginx","image":"nginx"}
           ]
+      single-image-name:
+        description: >-
+          Image name for the PHP target of a pimcore-docker >= 10 project (its stage builds FROM
+          pimcore-docker/pimcore or pimcore-slim). Replaces the legacy name "php-alpine-fpm": the
+          image is no longer an fpm-only image, it also runs cli, workers and the blackfire probe.
+        required: false
+        type: string
+        default: "php-alpine"
+      legacy-image-alias:
+        description: >-
+          Transition aid: also push the single image under its legacy name (php-alpine-fpm), so
+          manifests that still reference the old name keep resolving. Turn off once every manifest
+          points at single-image-name.
+        required: false
+        type: boolean
+        default: true
       # --- Build args ---
       dockerfile:
         description: "Dockerfile path"
@@ -107,23 +123,73 @@ on:
     outputs:
       image-tag:
         description: "The container image tag that was pushed"
-        value: ${{ jobs.build.outputs.image-tag }}
+        value: ${{ jobs.targets.outputs.image-tag }}
 
 jobs:
+  # Keep only the targets whose stage exists in the Dockerfile, so no runner is
+  # started for the rest. pimcore-docker >= 10.0 ships one PHP image for fpm, cli,
+  # supervisord and blackfire: those projects only define cors_php + cors_nginx,
+  # older projects still define all four PHP stages. The default target list
+  # therefore works for both without the caller overriding it.
+  targets:
+    name: "Resolve targets"
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.filter.outputs.matrix }}
+      count: ${{ steps.filter.outputs.count }}
+      image-tag: ${{ inputs.container-tag }}
+    steps:
+      - name: Checkout Dockerfile
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: ${{ inputs.dockerfile }}
+          sparse-checkout-cone-mode: false
+
+      - name: Filter targets by Dockerfile stages
+        id: filter
+        env:
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          TARGETS: ${{ inputs.targets }}
+          SINGLE_NAME: ${{ inputs.single-image-name }}
+          LEGACY_ALIAS: ${{ inputs.legacy-image-alias }}
+        run: |
+          kept='[]'
+          while IFS= read -r entry; do
+            target="$(jq -r '.target' <<<"$entry")"
+            from="$(grep -iE "^FROM[[:space:]].*[[:space:]]AS[[:space:]]+${target}[[:space:]]*(#.*)?$" "$DOCKERFILE" | head -1 || true)"
+            if [ -n "$from" ]; then
+              # pimcore-docker >= 10: the stage builds FROM the single `pimcore` image, so the
+              # result is not an fpm-only image any more -> php-alpine instead of php-alpine-fpm.
+              if [ "$(jq -r '.image' <<<"$entry")" = "php-alpine-fpm" ] && grep -qE "pimcore-docker/pimcore(-slim)?:" <<<"$from"; then
+                alias=""; [ "$LEGACY_ALIAS" = "true" ] && alias="php-alpine-fpm"
+                entry="$(jq -c --arg n "$SINGLE_NAME" --arg a "$alias" '.image = $n | .alias = $a' <<<"$entry")"
+              fi
+              kept="$(jq -c --argjson e "$entry" '. + [$e]' <<<"$kept")"
+            else
+              echo "::notice::Stage '${target}' not found in ${DOCKERFILE}, not building $(jq -r '.image' <<<"$entry")"
+            fi
+          done < <(jq -c '.[]' <<<"$TARGETS")
+          echo "matrix=$kept" >> "$GITHUB_OUTPUT"
+          echo "count=$(jq 'length' <<<"$kept")" >> "$GITHUB_OUTPUT"
+          echo "Building: $(jq -r '[.[].image] | join(", ")' <<<"$kept")"
+
   build:
     name: "Build & Push"
+    needs: targets
+    if: needs.targets.outputs.count != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
-    outputs:
-      image-tag: ${{ inputs.container-tag }}
 
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.targets) }}
+        include: ${{ fromJSON(needs.targets.outputs.matrix) }}
 
     steps:
       - name: Checkout
@@ -175,17 +241,22 @@ jobs:
         env:
           REGISTRY_PREFIX: ${{ steps.registry.outputs.prefix }}
           IMAGE_NAME: ${{ matrix.image }}
+          IMAGE_ALIAS: ${{ matrix.alias }}
           CONTAINER_TAG: ${{ inputs.container-tag }}
           PUSH_LATEST: ${{ inputs.push-latest }}
           BRANCH_NAME: ${{ inputs.branch-name }}
         run: |
-          IMAGE="${REGISTRY_PREFIX}/${IMAGE_NAME}"
           {
             echo "tags<<EOF"
-            echo "${IMAGE}:${CONTAINER_TAG}"
-            if [ "$PUSH_LATEST" = "true" ] && [ -n "$BRANCH_NAME" ]; then
-              echo "${IMAGE}:${BRANCH_NAME}-latest"
-            fi
+            # the alias (legacy image name during the php-alpine-fpm -> php-alpine transition)
+            # is the same build pushed under a second name, not a second build
+            for name in "$IMAGE_NAME" $IMAGE_ALIAS; do
+              IMAGE="${REGISTRY_PREFIX}/${name}"
+              echo "${IMAGE}:${CONTAINER_TAG}"
+              if [ "$PUSH_LATEST" = "true" ] && [ -n "$BRANCH_NAME" ]; then
+                echo "${IMAGE}:${BRANCH_NAME}-latest"
+              fi
+            done
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -269,27 +340,8 @@ jobs:
           echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
           echo "Composed composer auth from $(jq -rn --argjson a "${BASE:-{\}}" '($a["http-basic"]//{}|keys|length)') base + $(jq -rn --argjson b "${EXTRA:-{\}}" '($b["http-basic"]//{}|keys|length)') extra host(s)"
 
-      # --- Skip targets the project Dockerfile does not define ---
-      # pimcore-docker >= 10.0 ships one PHP image for fpm, cli, supervisord and
-      # blackfire, so those projects only have a cors_php stage. Older projects
-      # still define all four. Building a missing stage would fail the job.
-      - name: Check target stage
-        id: stage
-        env:
-          DOCKERFILE: ${{ inputs.dockerfile }}
-          TARGET: ${{ matrix.target }}
-          IMAGE_NAME: ${{ matrix.image }}
-        run: |
-          if grep -qiE "^FROM[[:space:]].*[[:space:]]AS[[:space:]]+${TARGET}[[:space:]]*(#.*)?$" "$DOCKERFILE"; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Stage '${TARGET}' not found in ${DOCKERFILE}, skipping image ${IMAGE_NAME}"
-          fi
-
       # --- Build & Push ---
       - name: Build and Push ${{ matrix.image }}
-        if: steps.stage.outputs.exists == 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
