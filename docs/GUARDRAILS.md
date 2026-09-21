@@ -18,7 +18,7 @@ Caller (`.github/workflows/pr-guardrail.yml`), die Logik bleibt zentral.
 | **R3** | Titel-Autofix: Besteht der PR-Titel nur aus dem Branchnamen, wird er durch `#<nummer> <Issue-Titel>` ersetzt. Andere Titel werden **nie** angefasst. | Reparatur, kein Verstoß |
 | **R4** | Die PR-Beschreibung enthält echten Fließtext (Default: mind. 50 Zeichen). HTML-Kommentare, Markdown-Überschriften und leere Checkboxen zählen nicht. | Verstoß |
 | **R5** | Alle Check-Runs und Commit-Statuses am Head-Commit sind grün, keine Merge-Konflikte. Laufende Checks lösen **nichts** aus — nur ein endgültiger Fehlschlag (`failure`, `cancelled`, `timed_out`) oder ein Konflikt zählt. | Verstoß |
-| **R6** | Fehlt eine Closing-Reference auf das Issue aus R1, hängt der Guardrail `Closes #<nummer>` an den PR-Body an (GitHub-Verknüpfung: Development-Sidebar, Projects-Automation). Liegt das Issue in einem anderen Repo, qualifiziert: `Closes owner/repo#<nummer>`. | Reparatur, kein Verstoß |
+| **R6** | Fehlt eine Referenz (`Refs`/`Closes`) auf das Issue aus R1, hängt der Guardrail `Refs #<nummer>` an den PR-Body an — bewusst nicht `Closes`, der Merge soll das Ticket nicht von selbst schließen. Liegt das Issue in einem anderen Repo, qualifiziert: `Refs owner/repo#<nummer>`. | Reparatur, kein Verstoß |
 
 ## Was passiert bei einem Verstoß?
 
@@ -103,8 +103,8 @@ Die Reihenfolge ist wichtig, weil kleine Nummern in beiden Repos existieren
 können; das Projekt-Repo gewinnt. Der Branch bleibt `issue/<nummer>` — die
 Konvention ändert sich für Entwickler nicht.
 
-R6 ergänzt die Closing-Referenz dann **qualifiziert**
-(`Closes cors-gmbh/bellaflora#123`), weil ein nacktes `#123` auf das
+R6 ergänzt die Referenz dann **qualifiziert**
+(`Refs cors-gmbh/bellaflora#123`), weil ein nacktes `#123` auf das
 Manifest-Repo zeigen würde. Der Token bekommt zusätzlich Lesezugriff auf das
 Projekt-Repo (siehe Schritt „Resolve token repositories" im Reusable Workflow).
 
