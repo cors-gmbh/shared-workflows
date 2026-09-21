@@ -335,11 +335,11 @@ describe('R5: normalizeCheckContexts', () => {
 
 describe('R6: closingReference', () => {
   it('appends when the body has no reference at all', () => {
-    assert.equal(closingReference({ body: 'Beschreibung.', issueNumber: 123 }), 'Closes #123')
+    assert.equal(closingReference({ body: 'Beschreibung.', issueNumber: 123 }), 'Refs #123')
   })
 
   it('appends for an empty body', () => {
-    assert.equal(closingReference({ body: '', issueNumber: 123 }), 'Closes #123')
+    assert.equal(closingReference({ body: '', issueNumber: 123 }), 'Refs #123')
   })
 
   it('does not append when GitHub already resolved the link', () => {
@@ -355,13 +355,17 @@ describe('R6: closingReference', () => {
     assert.equal(closingReference({ body: 'Resolved: #123', issueNumber: 123 }), null)
   })
 
+  it('does not append its own Refs line twice', () => {
+    assert.equal(closingReference({ body: 'Text.\n\nRefs #123', issueNumber: 123 }), null)
+  })
+
   it('appends when only a bare #123 without keyword is present', () => {
-    assert.equal(closingReference({ body: 'siehe #123', issueNumber: 123 }), 'Closes #123')
+    assert.equal(closingReference({ body: 'siehe #123', issueNumber: 123 }), 'Refs #123')
   })
 
   it('is exact about the number (no prefix matches)', () => {
-    assert.equal(closingReference({ body: 'Closes #12', issueNumber: 123 }), 'Closes #123')
-    assert.equal(closingReference({ body: 'Closes #1234', issueNumber: 123 }), 'Closes #123')
+    assert.equal(closingReference({ body: 'Closes #12', issueNumber: 123 }), 'Refs #123')
+    assert.equal(closingReference({ body: 'Closes #1234', issueNumber: 123 }), 'Refs #123')
   })
 
   it('does nothing without an issue number', () => {
@@ -378,7 +382,7 @@ describe('R6: closingReference', () => {
   it('qualifies the reference when the issue lives in another repository', () => {
     assert.equal(
       closingReference({ body: 'Beschreibung.', ...crossRepo }),
-      'Closes cors-gmbh/bellaflora#123',
+      'Refs cors-gmbh/bellaflora#123',
     )
   })
 
@@ -390,7 +394,7 @@ describe('R6: closingReference', () => {
     // `#123` would point at the manifest repo, not at the ticket.
     assert.equal(
       closingReference({ body: 'Closes #123', ...crossRepo }),
-      'Closes cors-gmbh/bellaflora#123',
+      'Refs cors-gmbh/bellaflora#123',
     )
   })
 
@@ -401,7 +405,7 @@ describe('R6: closingReference', () => {
         ...crossRepo,
         linkedIssues: [{ number: 123, repo: 'cors-gmbh/etwas-anderes' }],
       }),
-      'Closes cors-gmbh/bellaflora#123',
+      'Refs cors-gmbh/bellaflora#123',
     )
     assert.equal(
       closingReference({
@@ -481,7 +485,7 @@ describe('evaluate', () => {
     assert.equal(result.isBot, false)
     assert.equal(result.issueNumber, 123)
     assert.equal(result.titleFix, '#123 DAM Import bricht ab')
-    assert.equal(result.appendClosing, 'Closes #123')
+    assert.equal(result.appendClosing, 'Refs #123')
     assert.equal(result.ciPending, false)
   })
 

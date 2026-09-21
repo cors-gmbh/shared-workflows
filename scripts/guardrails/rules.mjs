@@ -296,6 +296,12 @@ function hasClosingKeywordFor(body, reference) {
   return re.test(body ?? '')
 }
 
+// The appended `Refs` line itself: without this check every run would add it again.
+function hasRefsFor(body, reference) {
+  const re = new RegExp(`\\brefs\\s*:?\\s+${escapeRegExp(reference)}\\b`, 'i')
+  return re.test(body ?? '')
+}
+
 /**
  * R6 — make sure GitHub links the PR to the issue from R1 (Development
  * sidebar, Projects automation). If neither the resolved
@@ -305,7 +311,7 @@ function hasClosingKeywordFor(body, reference) {
  * `issueRepo` is where the issue actually lives and `selfRepo` this PR's
  * repository (both `owner/name`). They differ for repos whose tickets are
  * tracked elsewhere; the reference then has to be qualified
- * (`Closes cors-gmbh/bellaflora#123`), because a bare `#123` would point at
+ * (`Refs cors-gmbh/bellaflora#123`), because a bare `#123` would point at
  * this repository. `linkedIssues` are the already resolved closing
  * references as { number, repo }.
  */
@@ -328,8 +334,9 @@ export function closingReference({
       linked.number === issueNumber && (!targetRepo || !linked.repo || linked.repo === targetRepo),
   )
   if (alreadyLinked) return null
-  if (hasClosingKeywordFor(body, reference)) return null
-  return `Closes ${reference}`
+  if (hasClosingKeywordFor(body, reference) || hasRefsFor(body, reference)) return null
+  // `Refs`, not `Closes`: a merge must not close the ticket on its own.
+  return `Refs ${reference}`
 }
 
 // --- Bot detection --------------------------------------------------------------
