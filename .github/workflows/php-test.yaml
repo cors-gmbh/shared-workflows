@@ -586,14 +586,9 @@ jobs:
       DATABASE_PASSWORD: pimcore
       DATABASE_NAME: pimcore
       PIMCORE_OPENSEARCH_DSN: opensearch://127.0.0.1:9200?ssl=false
-      PIMCORE_INSTALL_MYSQL_HOST_SOCKET: 127.0.0.1
-      PIMCORE_INSTALL_MYSQL_PORT: "3306"
-      PIMCORE_INSTALL_MYSQL_USERNAME: pimcore
-      PIMCORE_INSTALL_MYSQL_PASSWORD: pimcore
-      PIMCORE_INSTALL_MYSQL_DATABASE: pimcore
-      PIMCORE_INSTALL_SKIP_DATABASE_CONFIG: "true"
-      PIMCORE_INSTALL_ADMIN_USERNAME: admin
-      PIMCORE_INSTALL_ADMIN_PASSWORD: admin
+      # pimcore-install (Pimcore 2026) reads the database from the install profile's env definitions
+      PIMCORE_ADMIN_USER: admin
+      PIMCORE_ADMIN_PASSWORD: admin
       PIMCORE_FUNCTIONAL: "1"
     steps:
       - name: Checkout
