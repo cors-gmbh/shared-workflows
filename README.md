@@ -9,7 +9,7 @@ Reusable GitHub Actions workflows for CORS Pimcore projects and bundles.
 | Workflow | Replaces (GitLab) | Description |
 |---|---|---|
 | `project-ci.yaml` | `.project-gitlab-ci.yml` include | Test → Build → Manifest für Pimcore-Projekte in einem Aufruf. Der Caller `ci.yaml` ist in allen Projekt-Repos identisch (File-Sync); Registry-Pfad und Manifest-Repo werden aus dem Repo-Namen abgeleitet, Overrides per Repo-Variablen `GCP_REGISTRY_PATH`, `CD_REPO`, `NGINX_VERSION` |
-| `php-test.yaml` | `test` stage (project + bundle) | ECS, PHPStan, Psalm, Twig/YAML/Container lint, Helm lint |
+| `php-test.yaml` | `test` stage (project + bundle) | ECS, PHPStan, Psalm, Twig/YAML/Container lint, Helm lint, PHPUnit (unit and functional, see [PHPUnit](#phpunit)) |
 | `containerize.yaml` | `build_and_push` stage | Multi-target Docker build, GHCR or GCP registry; targets missing from the Dockerfile are skipped (pimcore-docker 9.x and 10.x projects) |
 | `update-manifest.yaml` | `update_manifest` stage | CD repo update via yq or helm template (GitOps) |
 | `frontend-build.yaml` | — | Build Pimcore Studio frontend (Rsbuild), type-check, commit assets |
@@ -82,6 +82,32 @@ jobs:
     secrets:
       composer_auth: ${{ secrets.COMPOSER_AUTH }}
 ```
+
+### PHPUnit
+
+`php-test.yaml` runs PHPUnit in two optional jobs. Both detect by themselves whether the repo has
+tests, so they can be enabled for repos without tests:
+
+- `phpunit: true` runs PHPUnit without database. Skipped when there is no `phpunit.xml(.dist)` or
+  no `*Test.php` below `tests/` outside the functional path. Default arguments:
+  `--exclude-testsuite functional`, override with `phpunit-args`.
+- `phpunit-functional: true` installs Pimcore against MySQL and OpenSearch service containers
+  (`vendor/bin/pimcore-install $pimcore-install-args`) and runs `phpunit-functional-args`
+  (default `--testsuite functional`) with `PIMCORE_FUNCTIONAL=1`. Skipped when
+  `phpunit-functional-path` (default `tests/Functional`) contains no `*Test.php`; an empty
+  directory with `.gitkeep` does not count. The kernel boots with `APP_ENV=dev` and the
+  registration from `env_local`, database and OpenSearch come from environment variables
+  (`DATABASE_URL`, `PIMCORE_OPENSEARCH_DSN`). `functional-opensearch-image: ''` skips OpenSearch.
+
+```yaml
+    with:
+      phpunit: true
+      phpunit-functional: true
+      pimcore-install-args: '--install-profile=App\InstallProfile\StudioInstallProfile'
+```
+
+Functional tests should skip themselves without `PIMCORE_FUNCTIONAL=1`, so a plain local
+`vendor/bin/phpunit` stays fast.
 
 ### Studio frontend build (`.github/workflows/frontend-build.yaml`)
 

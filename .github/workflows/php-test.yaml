@@ -80,6 +80,47 @@ on:
         required: false
         type: boolean
         default: true
+      # --- PHPUnit ---
+      phpunit:
+        description: "Run PHPUnit without database. Skipped when the repo has no phpunit.xml(.dist) or no *Test.php outside phpunit-functional-path, so it is safe to enable for repos without tests"
+        required: false
+        type: boolean
+        default: false
+      phpunit-args:
+        description: "Arguments for the PHPUnit job. Empty = all test suites except \"functional\""
+        required: false
+        type: string
+        default: ""
+      phpunit-functional:
+        description: "Run functional PHPUnit tests against an installed Pimcore (MySQL + OpenSearch service containers). Skipped when phpunit-functional-path contains no *Test.php. The tests run with PIMCORE_FUNCTIONAL=1"
+        required: false
+        type: boolean
+        default: false
+      phpunit-functional-path:
+        description: "Directory of the functional tests (detection only)"
+        required: false
+        type: string
+        default: "tests/Functional"
+      phpunit-functional-args:
+        description: "Arguments for the functional PHPUnit job"
+        required: false
+        type: string
+        default: "--testsuite functional"
+      pimcore-install-args:
+        description: "Arguments for vendor/bin/pimcore-install in the functional job (e.g. --install-profile=App\\InstallProfile\\StudioInstallProfile)"
+        required: false
+        type: string
+        default: ""
+      functional-mysql-image:
+        description: "MySQL service image of the functional job"
+        required: false
+        type: string
+        default: "mysql:8.0"
+      functional-opensearch-image:
+        description: "OpenSearch service image of the functional job, empty = no OpenSearch"
+        required: false
+        type: string
+        default: "opensearchproject/opensearch:2.13.0"
     secrets:
       composer_auth:
         description: "Composer auth JSON for private packages (base — e.g. org-wide cors.repo.packagist token)"
@@ -104,6 +145,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       php-version: ${{ steps.v.outputs.php }}
+      has-unit-tests: ${{ steps.t.outputs.unit }}
+      has-functional-tests: ${{ steps.t.outputs.functional }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -123,6 +166,28 @@ jobs:
             echo "Resolved from ${ENV_FILE}: php=${php}"
           fi
           echo "php=${php}" >> "$GITHUB_OUTPUT"
+
+      - name: Detect PHPUnit tests
+        id: t
+        env:
+          FUNCTIONAL_PATH: ${{ inputs.phpunit-functional-path }}
+        run: |
+          # Not every repo has tests yet: the PHPUnit jobs only run where there is something to run.
+          # An empty suite directory (e.g. tests/Functional/.gitkeep) does not count.
+          unit=false
+          functional=false
+          functional_path="${FUNCTIONAL_PATH%/}"
+          if [ -f phpunit.xml.dist ] || [ -f phpunit.xml ]; then
+            if [ -d tests ] && find tests -name '*Test.php' -not -path "${functional_path}/*" | grep -q .; then
+              unit=true
+            fi
+            if [ -d "$functional_path" ] && find "$functional_path" -name '*Test.php' | grep -q .; then
+              functional=true
+            fi
+          fi
+          echo "PHPUnit tests: unit=${unit} functional=${functional}"
+          echo "unit=${unit}" >> "$GITHUB_OUTPUT"
+          echo "functional=${functional}" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
   # ECS + Symfony Linting (Twig, YAML, Container)
@@ -390,12 +455,212 @@ jobs:
         run: vendor/bin/psalm $PSALM_PATHS
 
   # ===========================================================================
+  # PHPUnit without database (separate job — runs in parallel with lint)
+  # ===========================================================================
+  phpunit:
+    name: "PHPUnit"
+    if: inputs.phpunit && needs.resolve-versions.outputs.has-unit-tests == 'true'
+    needs: resolve-versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ needs.resolve-versions.outputs.php-version }}
+          extensions: ctype, iconv, pdo_mysql, intl, zip, gd, mbstring, dom, xml
+          coverage: none
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache composer dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ steps.composer-cache.outputs.dir }}
+            vendor
+          key: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-
+
+      - name: Setup composer auth
+        env:
+          BASE: ${{ secrets.composer_auth }}
+          EXTRA: ${{ secrets.composer_auth_extra }}
+        run: |
+          # Deep-merge base + extra (extra wins on host conflicts) into a single
+          # COMPOSER_AUTH for all following steps. One authoritative source — no
+          # ambiguity between env and auth.json file precedence.
+          merged=$(jq -cn --argjson a "${BASE:-{\}}" --argjson b "${EXTRA:-{\}}" '$a * $b')
+          echo "::add-mask::$merged"
+          echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
+          echo "Composed COMPOSER_AUTH from $(jq -rn --argjson a "${BASE:-{\}}" '($a["http-basic"]//{}|keys|length)') base + $(jq -rn --argjson b "${EXTRA:-{\}}" '($b["http-basic"]//{}|keys|length)') extra host(s)"
+
+      - name: Composer install
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Write .env.local
+        env:
+          ENV_LOCAL: ${{ secrets.env_local }}
+        run: |
+          # Lines with an empty value (KEY=) are dropped: an unset repo secret must not
+          # override a value the project ships in its committed .env.
+          printf '%s\n' "$ENV_LOCAL" | grep -Ev '^[A-Za-z_][A-Za-z0-9_]*=\s*$' | grep -v '^\s*$' > .env.local || true
+          if [ -s .env.local ]; then
+            echo "Wrote .env.local ($(grep -c '=' .env.local) variables)"
+          else
+            rm -f .env.local
+            echo "No .env.local written (no non-empty variables)"
+          fi
+
+      - name: Build Pimcore classes
+        if: inputs.pimcore
+        run: PIMCORE_DISABLE_CACHE=1 bin/console pimcore:build:classes --env=dev
+        env:
+          APP_ENV: dev
+
+      - name: PHPUnit
+        env:
+          PHPUNIT_ARGS: ${{ inputs.phpunit-args }}
+        run: |
+          # The functional suite needs an installed Pimcore and runs in its own job
+          if [ -z "$PHPUNIT_ARGS" ]; then
+            PHPUNIT_ARGS="--exclude-testsuite functional"
+          fi
+          vendor/bin/phpunit $PHPUNIT_ARGS
+
+  # ===========================================================================
+  # PHPUnit functional tests against an installed Pimcore (MySQL + OpenSearch)
+  # ===========================================================================
+  phpunit-functional:
+    name: "PHPUnit (functional)"
+    if: inputs.phpunit-functional && needs.resolve-versions.outputs.has-functional-tests == 'true'
+    needs: resolve-versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    services:
+      mysql:
+        image: ${{ inputs.functional-mysql-image }}
+        env:
+          MYSQL_DATABASE: pimcore
+          MYSQL_USER: pimcore
+          MYSQL_PASSWORD: pimcore
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+      opensearch:
+        # an empty image skips the service
+        image: ${{ inputs.functional-opensearch-image }}
+        env:
+          discovery.type: single-node
+          plugins.security.disabled: "true"
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+          OPENSEARCH_INITIAL_ADMIN_PASSWORD: Op3nSearch!
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -fs http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      APP_ENV: dev
+      # Real environment variables win over .env/.env.local, the services replace the dev-compose hosts
+      DATABASE_URL: mysql://pimcore:pimcore@127.0.0.1:3306/pimcore?serverVersion=8.0.26
+      DATABASE_HOST: 127.0.0.1
+      DATABASE_PORT: "3306"
+      DATABASE_USER: pimcore
+      DATABASE_PASSWORD: pimcore
+      DATABASE_NAME: pimcore
+      PIMCORE_OPENSEARCH_DSN: opensearch://127.0.0.1:9200?ssl=false
+      # pimcore-install (Pimcore 2026) reads the database from the install profile's env definitions
+      PIMCORE_ADMIN_USER: admin
+      PIMCORE_ADMIN_PASSWORD: admin
+      PIMCORE_FUNCTIONAL: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ needs.resolve-versions.outputs.php-version }}
+          extensions: ctype, iconv, pdo_mysql, intl, zip, gd, mbstring, dom, xml
+          coverage: none
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache composer dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ steps.composer-cache.outputs.dir }}
+            vendor
+          key: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-
+
+      - name: Setup composer auth
+        env:
+          BASE: ${{ secrets.composer_auth }}
+          EXTRA: ${{ secrets.composer_auth_extra }}
+        run: |
+          # Deep-merge base + extra (extra wins on host conflicts) into a single
+          # COMPOSER_AUTH for all following steps. One authoritative source — no
+          # ambiguity between env and auth.json file precedence.
+          merged=$(jq -cn --argjson a "${BASE:-{\}}" --argjson b "${EXTRA:-{\}}" '$a * $b')
+          echo "::add-mask::$merged"
+          echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
+          echo "Composed COMPOSER_AUTH from $(jq -rn --argjson a "${BASE:-{\}}" '($a["http-basic"]//{}|keys|length)') base + $(jq -rn --argjson b "${EXTRA:-{\}}" '($b["http-basic"]//{}|keys|length)') extra host(s)"
+
+      - name: Composer install
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Write .env.local
+        env:
+          ENV_LOCAL: ${{ secrets.env_local }}
+        run: |
+          # Lines with an empty value (KEY=) are dropped: an unset repo secret must not
+          # override a value the project ships in its committed .env.
+          printf '%s\n' "$ENV_LOCAL" | grep -Ev '^[A-Za-z_][A-Za-z0-9_]*=\s*$' | grep -v '^\s*$' > .env.local || true
+          if [ -s .env.local ]; then
+            echo "Wrote .env.local ($(grep -c '=' .env.local) variables)"
+          else
+            rm -f .env.local
+            echo "No .env.local written (no non-empty variables)"
+          fi
+
+      - name: Install Pimcore
+        env:
+          PIMCORE_INSTALL_ARGS: ${{ inputs.pimcore-install-args }}
+        run: vendor/bin/pimcore-install $PIMCORE_INSTALL_ARGS --no-interaction
+
+      - name: PHPUnit (functional)
+        env:
+          PHPUNIT_ARGS: ${{ inputs.phpunit-functional-args }}
+        run: vendor/bin/phpunit $PHPUNIT_ARGS
+
+  # ===========================================================================
   # Gate job — ensures the workflow is never fully skipped
   # ===========================================================================
   complete:
     name: "Tests Complete"
     if: always()
-    needs: [lint, phpstan, psalm]
+    needs: [lint, phpstan, psalm, phpunit, phpunit-functional]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -406,8 +671,10 @@ jobs:
           LINT_RESULT: ${{ needs.lint.result }}
           PHPSTAN_RESULT: ${{ needs.phpstan.result }}
           PSALM_RESULT: ${{ needs.psalm.result }}
+          PHPUNIT_RESULT: ${{ needs.phpunit.result }}
+          PHPUNIT_FUNCTIONAL_RESULT: ${{ needs.phpunit-functional.result }}
         run: |
-          for result in "$LINT_RESULT" "$PHPSTAN_RESULT" "$PSALM_RESULT"; do
+          for result in "$LINT_RESULT" "$PHPSTAN_RESULT" "$PSALM_RESULT" "$PHPUNIT_RESULT" "$PHPUNIT_FUNCTIONAL_RESULT"; do
             if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
               echo "Job failed or was cancelled: $result"
               exit 1
