@@ -217,6 +217,11 @@ an den Anfang der PR-Beschreibung:
   über `secrets: inherit`) wird jeder Key in Jira nachgeschlagen: nur
   existierende Tickets werden verlinkt, mit Zusammenfassung und Status.
   Schlägt der Lookup fehl, bleibt es beim reinen Link, der Job bleibt grün.
+- Das Token ist ein **scoped API-Token** mit `read:jira-work` (Account mit
+  Leserechten auf die Projekte). Scoped Tokens gehen nur über das Gateway
+  `api.atlassian.com/ex/jira/<cloudId>`; die Cloud-ID holt der Workflow
+  selbst aus `<jira-base-url>/_edge/tenant_info`. Ein normales (unscoped)
+  Token funktioniert über diesen Weg nicht.
 - **Ohne Jira-Zugang** wird der Key ungeprüft verlinkt.
 - Der Block steht zwischen `<!-- jira-link:start -->` und
   `<!-- jira-link:end -->` und wird bei jedem `opened`/`edited`/`reopened`

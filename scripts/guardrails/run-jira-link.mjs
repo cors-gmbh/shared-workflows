@@ -2,8 +2,8 @@
 // Links the Jira tickets a PR refers to (branch/title, e.g. RON-229-stage)
 // in a managed block at the top of the PR body.
 //
-// With Jira credentials (JIRA_USER_EMAIL + JIRA_API_TOKEN) every candidate
-// key is looked up and only existing tickets are linked, with summary and
+// With Jira credentials (JIRA_USER_EMAIL + a scoped JIRA_API_TOKEN with
+// read:jira-work) every candidate key is looked up and only existing tickets are linked, with summary and
 // status. Without credentials the keys are linked unverified. Failures of
 // the Jira lookup never fail the job — the link is the useful part.
 
@@ -11,8 +11,21 @@ import { readFileSync } from 'node:fs'
 import { GitHubClient, requireEnv } from './github.mjs'
 import { extractKeys, parseProjectKeys, renderBlock, upsertBlock } from './jira.mjs'
 
-async function lookupIssue(baseUrl, auth, key) {
-  const url = `${baseUrl.replace(/\/+$/, '')}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,status`
+// Scoped API tokens only work through the Atlassian gateway, addressed by the
+// site's cloud ID — the site URL itself rejects them. The ID comes from the
+// site's public tenant_info endpoint, so callers need no extra setting.
+async function resolveApiUrl(baseUrl) {
+  const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/_edge/tenant_info`, {
+    headers: { accept: 'application/json', 'user-agent': 'cors-pr-jira-link' },
+  })
+  if (!response.ok) throw new Error(`Jira cloud ID lookup failed (HTTP ${response.status})`)
+  const { cloudId } = await response.json()
+  if (!cloudId) throw new Error('Jira cloud ID lookup returned no cloudId')
+  return `https://api.atlassian.com/ex/jira/${cloudId}`
+}
+
+async function lookupIssue(apiUrl, auth, key) {
+  const url = `${apiUrl}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,status`
   const response = await fetch(url, {
     headers: { authorization: `Basic ${auth}`, accept: 'application/json', 'user-agent': 'cors-pr-jira-link' },
   })
@@ -30,11 +43,19 @@ async function resolveIssues(keys, baseUrl) {
     return keys.map((key) => ({ key }))
   }
 
+  let apiUrl
+  try {
+    apiUrl = await resolveApiUrl(baseUrl)
+  } catch (error) {
+    console.log(`::warning::${error.message} — linking the keys without lookup.`)
+    return keys.map((key) => ({ key }))
+  }
+
   const auth = Buffer.from(`${email}:${token}`).toString('base64')
   const issues = []
   for (const key of keys) {
     try {
-      const issue = await lookupIssue(baseUrl, auth, key)
+      const issue = await lookupIssue(apiUrl, auth, key)
       if (issue) issues.push(issue)
       else console.log(`${key} does not exist in Jira — skipped.`)
     } catch (error) {

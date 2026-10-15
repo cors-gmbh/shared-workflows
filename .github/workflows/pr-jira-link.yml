@@ -33,7 +33,7 @@ on:
         description: "Jira account for the ticket lookup (org secret, pass via `secrets: inherit`). Optional."
         required: false
       JIRA_API_TOKEN:
-        description: "API token of that account (org secret, pass via `secrets: inherit`). Optional."
+        description: "Scoped API token of that account with read:jira-work (org secret, pass via `secrets: inherit`). Optional."
         required: false
 
 permissions:
