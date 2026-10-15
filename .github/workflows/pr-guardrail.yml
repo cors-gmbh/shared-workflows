@@ -113,7 +113,7 @@ jobs:
 
       # Guardrail logic always comes from the base side: shared-workflows at
       # the exact commit of this reusable workflow (job_workflow_sha), so the
-      # caller's @v1 pin also pins the scripts.
+      # workflow and its scripts always come from the same commit.
       - name: "📥 Checkout guardrail scripts"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
