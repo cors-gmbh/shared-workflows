@@ -238,12 +238,25 @@ ein Projekt auf GitHub-Issues, fliegt es dort raus und kommt in Gruppe 1.
 
 ## Versionierung
 
-Die Caller referenzieren `cors-gmbh/shared-workflows/...@v1` — ein **Tag**,
-kein Branch. Breaking Changes an Inputs oder Verhalten ⇒ neues Major-Tag
-(`v2`) und Umstellung über die Templates. Kompatible Fixes ⇒ `v1`-Tag auf den
-neuen Commit verschieben. Das Checkout der Skripte im Reusable Workflow hängt
-über `github.job_workflow_sha` am selben Commit wie das Tag — Workflow und
-Skripte sind damit immer konsistent versioniert.
+Die Caller referenzieren `cors-gmbh/shared-workflows/...@main`, wie die
+CI-, Dependency-Update- und Frontend-Build-Caller auch. Jeder Merge auf
+`main` ist damit sofort in allen Repos live — kein Tag, das nachgezogen
+werden muss (das frühere `@v1` blieb monatelang stehen, neue Inputs und
+Workflows kamen nie an). Das Checkout der Skripte im Reusable Workflow hängt
+über `github.job_workflow_sha` am selben Commit wie der Workflow selbst —
+Workflow und Skripte sind damit immer konsistent.
+
+Folgen für Änderungen hier:
+
+- **Kompatibel bleiben.** Neue Inputs brauchen einen Default, der das
+  bisherige Verhalten beibehält; Inputs nicht umbenennen oder entfernen,
+  solange ein Template sie übergibt.
+- **Breaking Changes** nur zusammen mit dem Template-Update in
+  `shared-workflows-private`: erst den Workflow so erweitern, dass alter und
+  neuer Caller funktionieren, dann die Templates umstellen (Sync), danach
+  das Alte entfernen.
+- **Neue Reusable Workflows** zuerst hier mergen, dann den Caller in die
+  Sync-Gruppen aufnehmen — sonst zeigt der verteilte Caller ins Leere.
 
 > Damit andere Repos die Reusable Workflows überhaupt aufrufen dürfen, muss
 > in diesem Repo unter **Settings → Actions → General → Access** die Option
@@ -253,7 +266,7 @@ Skripte sind damit immer konsistent versioniert.
 
 | Symptom | Ursache / Lösung |
 |---|---|
-| Guardrail läuft gar nicht | Caller-Datei im Ziel-Repo vorhanden? `v1`-Tag existiert? Access-Setting (s. o.) aktiv? |
+| Guardrail läuft gar nicht | Caller-Datei im Ziel-Repo vorhanden? Referenziert sie `@main` (alte Caller mit `@v1` neu syncen)? Access-Setting (s. o.) aktiv? |
 | „Create app token“ schlägt fehl | App nicht im Repo installiert oder Org-Secrets nicht freigegeben. |
 | Kommentar erscheint nicht, Job grün | PR ist Draft (wird übersprungen) oder CI läuft noch (R5 wartet). |
 | Bypass-Label wird sofort entfernt | Absender hat weder `admin` noch `maintain` — so soll es sein. |
