@@ -203,6 +203,34 @@ läuft aber unabhängig vom Guardrail — zum Deaktivieren den Job
 tut der Job nichts und bleibt grün (idempotent). Voraussetzung: Die App hat
 die Organization-Permission **Projects: Read & Write**.
 
+## `pr-jira-link.yml`
+
+Für Projekte, deren Tickets noch in Jira liegen (Branches wie
+`RON-229-stage` statt `issue/<n>`) und die deshalb nicht im Guardrail
+stehen. Der Workflow sucht den Jira-Key im Branch-Namen (case-insensitive)
+und im PR-Titel (nur Großbuchstaben) und schreibt einen verwalteten Block
+an den Anfang der PR-Beschreibung:
+
+> 🎫 **Jira:** [RON-229](https://economix.atlassian.net/browse/RON-229) — Zusammenfassung · _Status_
+
+- **Mit Jira-Zugang** (Org-Secrets `JIRA_USER_EMAIL` + `JIRA_API_TOKEN`,
+  über `secrets: inherit`) wird jeder Key in Jira nachgeschlagen: nur
+  existierende Tickets werden verlinkt, mit Zusammenfassung und Status.
+  Schlägt der Lookup fehl, bleibt es beim reinen Link, der Job bleibt grün.
+- **Ohne Jira-Zugang** wird der Key ungeprüft verlinkt.
+- Der Block steht zwischen `<!-- jira-link:start -->` und
+  `<!-- jira-link:end -->` und wird bei jedem `opened`/`edited`/`reopened`
+  neu geschrieben; der Rest der Beschreibung bleibt unangetastet. Ohne Key
+  verschwindet ein alter Block wieder. Bot-PRs werden übersprungen.
+- Geschrieben wird mit dem `GITHUB_TOKEN` des Callers (`pull-requests:
+  write`), dadurch löst die Änderung keinen neuen Lauf aus.
+- Inputs: `jira-base-url` (Default `https://economix.atlassian.net`),
+  `project-keys` (z. B. `RON,TIL`, leer = jeder Key).
+
+Verteilt wird der Caller `templates/pr-jira-link.yml` aus
+`shared-workflows-private` an die von GitLab migrierten Projekte. Wechselt
+ein Projekt auf GitHub-Issues, fliegt es dort raus und kommt in Gruppe 1.
+
 ## Versionierung
 
 Die Caller referenzieren `cors-gmbh/shared-workflows/...@v1` — ein **Tag**,

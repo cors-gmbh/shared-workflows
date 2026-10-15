@@ -1,0 +1,65 @@
+name: "🎫 PR Jira Link"
+
+# Reusable workflow for project repos whose tickets still live in Jira
+# (branches like RON-229-stage instead of issue/<n>): finds the Jira key in
+# the PR's branch or title and links the ticket in a managed block at the
+# top of the PR body — with summary and status when Jira credentials are
+# available, as a plain link otherwise.
+#
+# Called from the synced caller (templates/pr-jira-link.yml in
+# cors-gmbh/shared-workflows-private) on pull_request_target. Like the
+# guardrail it NEVER checks out PR head code: only the scripts of this repo
+# at the exact ref of this workflow file. Branch, title and body reach the
+# script through the event payload file, never through shell interpolation.
+#
+# The body is written with the caller's GITHUB_TOKEN, so the edit does not
+# trigger the workflow again.
+
+on:
+  workflow_call:
+    inputs:
+      jira-base-url:
+        description: "Base URL of the Jira site."
+        type: string
+        required: false
+        default: "https://economix.atlassian.net"
+      project-keys:
+        description: "Comma-separated Jira project keys to accept (e.g. 'RON,TIL'). Empty = any key."
+        type: string
+        required: false
+        default: ""
+    secrets:
+      JIRA_USER_EMAIL:
+        description: "Jira account for the ticket lookup (org secret, pass via `secrets: inherit`). Optional."
+        required: false
+      JIRA_API_TOKEN:
+        description: "API token of that account (org secret, pass via `secrets: inherit`). Optional."
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  jira-link:
+    if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: "📥 Checkout scripts"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/shared-workflows
+          ref: ${{ github.job_workflow_sha }}
+          sparse-checkout: scripts/guardrails
+          persist-credentials: false
+
+      - name: "🎫 Link Jira ticket"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          JIRA_BASE_URL: ${{ inputs.jira-base-url }}
+          JIRA_PROJECT_KEYS: ${{ inputs.project-keys }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: node scripts/guardrails/run-jira-link.mjs
