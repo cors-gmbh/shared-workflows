@@ -44,6 +44,21 @@ describe('renderStatusComment', () => {
     assert.match(body, /➡️ Beschreibe die Änderung\./)
   })
 
+  it('opens with an overview row for every rule when the results are given', () => {
+    const ruleResults = [
+      { rule: 'R1', title: 'Branch-Name', status: 'fail', note: null },
+      { rule: 'R5', title: 'CI', status: 'pending', note: 'Checks laufen noch' },
+      { rule: 'R6', title: 'Issue-Referenz', status: 'repaired', note: '`Refs #1` ergänzt' },
+      { rule: 'R3', title: 'Titel', status: 'skipped', note: 'Bot-PR' },
+    ]
+    const body = renderStatusComment({ violations: [violation], ruleResults })
+    assert.match(body, /\| R1 \| Branch-Name \| ❌ verletzt \|/)
+    assert.match(body, /\| R5 \| CI \| ⏳ ausstehend \(Checks laufen noch\) \|/)
+    assert.match(body, /\| R6 \| Issue-Referenz \| 🔧 automatisch behoben \(`Refs #1` ergänzt\) \|/)
+    assert.match(body, /\| R3 \| Titel \| ➖ übersprungen \(Bot-PR\) \|/)
+    assert.ok(body.indexOf('| R1 |') < body.indexOf('### ❌ R1'))
+  })
+
   it('mentions running checks only when CI is pending', () => {
     assert.match(renderStatusComment({ violations: [violation], ciPending: true }), /CI-Checks laufen noch/)
     assert.doesNotMatch(renderStatusComment({ violations: [violation], ciPending: false }), /laufen noch/)

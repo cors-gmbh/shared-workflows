@@ -5,7 +5,9 @@ import {
   checkBody,
   checkBranch,
   checkCi,
+  checkClosingReference,
   checkIssue,
+  checkTitle,
   issueRepoFor,
   closingReference,
   evaluate,
@@ -81,6 +83,12 @@ describe('R1: extractIssueNumber / checkBranch', () => {
 
 describe('R2: checkIssue', () => {
   const openIssue = { exists: true, isPullRequest: false, state: 'OPEN', title: 'Titel' }
+
+  it('fails when the branch carries no issue number (R1 failed)', () => {
+    const v = checkIssue({ issueNumber: null, issue: null })
+    assert.equal(v.rule, 'R2')
+    assert.match(v.message, /keine Issue-Nummer/)
+  })
 
   it('passes for an existing open issue', () => {
     assert.equal(checkIssue({ issueNumber: 5, issue: openIssue, requireIssueOpen: true }), null)
@@ -291,6 +299,39 @@ describe('R5: checkCi', () => {
     assert.deepEqual(result.violations, [])
     assert.equal(result.pending, false)
   })
+
+  it('lists every failed check, not only the first few', () => {
+    const names = Array.from({ length: 8 }, (_, i) => `job ${i + 1}`)
+    const result = checkCi({ checks: names.map(failed), mergeable: 'MERGEABLE' })
+    const { message } = result.violations[0]
+    assert.match(message, /^8 Checks sind am aktuellen Stand fehlgeschlagen:/)
+    for (const name of names) assert.match(message, new RegExp(`- \`${name}\``))
+    assert.doesNotMatch(message, /weitere/)
+  })
+
+  it('links each failed check to its log', () => {
+    const url = 'https://github.com/o/r/actions/runs/1/job/2'
+    const result = checkCi({ checks: [{ ...failed('tests'), url }], mergeable: 'MERGEABLE' })
+    assert.match(result.violations[0].message, /^1 Check ist/)
+    assert.ok(result.violations[0].message.includes(`- [\`tests\`](<${url}>)`))
+  })
+
+  it('groups failed jobs of the same name on one line, with a link per job', () => {
+    const checks = [
+      { ...failed('Chunk 1'), url: 'https://example.com/a' },
+      { ...failed('Chunk 1'), url: 'https://example.com/b' },
+    ]
+    const { message } = checkCi({ checks, mergeable: 'MERGEABLE' }).violations[0]
+    assert.ok(message.includes('- `Chunk 1` — [Job 1](<https://example.com/a>), [Job 2](<https://example.com/b>)'))
+    assert.equal(message.match(/Chunk 1/g).length, 1)
+  })
+
+  it('does not let a check name or URL break out of the markdown', () => {
+    const checks = [{ ...failed('evil` [x](https://evil.example)'), url: 'javascript:alert(1)' }]
+    const { message } = checkCi({ checks, mergeable: 'MERGEABLE' }).violations[0]
+    assert.ok(message.includes("- `evil' [x](https://evil.example)`"))
+    assert.doesNotMatch(message, /javascript:/)
+  })
 })
 
 describe('R5: normalizeCheckContexts', () => {
@@ -327,11 +368,49 @@ describe('R5: normalizeCheckContexts', () => {
   it('ignores unknown nodes gracefully', () => {
     assert.deepEqual(normalizeCheckContexts([null, {}, { __typename: 'Other' }]), [])
   })
+
+  it('carries the log URL of check runs and statuses', () => {
+    const nodes = [
+      { __typename: 'CheckRun', name: 'a', status: 'COMPLETED', conclusion: 'FAILURE', detailsUrl: 'https://x/a' },
+      { __typename: 'StatusContext', context: 'b', state: 'ERROR', targetUrl: 'https://x/b' },
+      { __typename: 'CheckRun', name: 'c', status: 'COMPLETED', conclusion: 'FAILURE' },
+    ]
+    assert.deepEqual(
+      normalizeCheckContexts(nodes).map((c) => c.url),
+      ['https://x/a', 'https://x/b', null],
+    )
+  })
 })
 
 // ---------------------------------------------------------------------------
 // R6 — closing reference
 // ---------------------------------------------------------------------------
+
+describe('R3: checkTitle (no valid issue)', () => {
+  it('fails for a title that is only the branch name', () => {
+    assert.equal(checkTitle({ title: 'Feature/dam import', branch: 'feature/dam-import' }).rule, 'R3')
+  })
+
+  it('passes for a human-written title', () => {
+    assert.equal(checkTitle({ title: 'DAM-Import repariert', branch: 'feature/dam-import' }), null)
+  })
+})
+
+describe('R6: checkClosingReference (no valid issue)', () => {
+  it('fails when the body references no issue', () => {
+    assert.equal(checkClosingReference({ body: 'Beschreibung.' }).rule, 'R6')
+  })
+
+  it('passes for a closing keyword, a bare Refs and a qualified Refs', () => {
+    assert.equal(checkClosingReference({ body: 'Beschreibung.\n\nFixes #12' }), null)
+    assert.equal(checkClosingReference({ body: 'Beschreibung.\n\nRefs #12' }), null)
+    assert.equal(checkClosingReference({ body: 'Beschreibung.\n\nRefs cors-gmbh/bellaflora#12' }), null)
+  })
+
+  it('passes when GitHub already links an issue', () => {
+    assert.equal(checkClosingReference({ body: '', linkedIssues: [{ number: 12, repo: 'o/r' }] }), null)
+  })
+})
 
 describe('R6: closingReference', () => {
   it('appends when the body has no reference at all', () => {
@@ -489,22 +568,49 @@ describe('evaluate', () => {
     assert.equal(result.ciPending, false)
   })
 
-  it('R1 violation skips the issue rules but still checks body and CI', () => {
+  it('R1 violation does not hide the rules that depend on the issue', () => {
     const result = evaluate({ ...humanFacts, branch: 'feature/123', body: '', issue: null })
     const rules = result.violations.map((v) => v.rule)
-    assert.deepEqual(rules, ['R1', 'R4'])
+    assert.deepEqual(rules, ['R1', 'R2', 'R4', 'R6'])
     assert.equal(result.titleFix, null)
     assert.equal(result.appendClosing, null)
   })
 
-  it('closed issue: violation and NO repairs', () => {
+  it('closed issue: violation, and the repairs it blocks are reported instead of applied', () => {
     const result = evaluate({
       ...humanFacts,
       issue: { exists: true, isPullRequest: false, state: 'CLOSED', title: 'DAM Import bricht ab' },
     })
-    assert.deepEqual(result.violations.map((v) => v.rule), ['R2'])
+    assert.deepEqual(result.violations.map((v) => v.rule), ['R2', 'R3', 'R6'])
     assert.equal(result.titleFix, null)
     assert.equal(result.appendClosing, null)
+  })
+
+  it('without a valid issue, R3 and R6 pass when there is nothing to repair', () => {
+    const result = evaluate({
+      ...humanFacts,
+      branch: 'feature/dam',
+      title: 'DAM-Import repariert',
+      body: `${humanFacts.body}\n\nRefs #77`,
+      issue: null,
+    })
+    assert.deepEqual(result.violations.map((v) => v.rule), ['R1', 'R2'])
+  })
+
+  it('reports every rule in the overview, in rule order', () => {
+    const result = evaluate({ ...humanFacts, checks: [{ name: 'build', kind: 'check', state: 'pending' }] })
+    assert.deepEqual(
+      result.ruleResults.map((r) => [r.rule, r.status]),
+      [
+        ['R1', 'pass'],
+        ['R2', 'pass'],
+        ['R3', 'repaired'],
+        ['R4', 'pass'],
+        ['R5', 'pending'],
+        ['R6', 'repaired'],
+      ],
+    )
+    assert.equal(result.ruleResults[5].note, '`Refs #123` ergänzt')
   })
 
   it('closed issue passes when require-issue-open is off', () => {
@@ -561,6 +667,6 @@ describe('evaluate', () => {
       checks: [{ name: 'build', kind: 'check', state: 'failure' }],
       mergeable: 'CONFLICTING',
     })
-    assert.deepEqual(result.violations.map((v) => v.rule), ['R2', 'R4', 'R5', 'R5'])
+    assert.deepEqual(result.violations.map((v) => v.rule), ['R2', 'R4', 'R5', 'R5', 'R6'])
   })
 })

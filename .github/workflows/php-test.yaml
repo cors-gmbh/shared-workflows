@@ -265,14 +265,21 @@ jobs:
         env:
           APP_ENV: dev
 
+      # Every lint below runs even when an earlier one failed, so one broken lint does not hide
+      # the result of the others behind another round trip. This step only runs (and so only
+      # succeeds) when the whole setup above did; the lints are gated on it.
+      - name: Setup complete
+        id: setup
+        run: echo "Setup complete, running the lints"
+
       - name: ECS
-        if: inputs.ecs
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && inputs.ecs }}
         env:
           ECS_PATHS: ${{ inputs.ecs-paths }}
         run: vendor/bin/ecs check $ECS_PATHS
 
       - name: Lint Twig
-        if: inputs.lint-twig
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && inputs.lint-twig }}
         env:
           TWIG_PATHS: ${{ inputs.lint-twig-paths }}
         run: |
@@ -283,13 +290,13 @@ jobs:
           done
 
       - name: Lint YAML
-        if: inputs.lint-yaml
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && inputs.lint-yaml }}
         env:
           YAML_PATHS: ${{ inputs.lint-yaml-paths }}
         run: bin/console lint:yaml $YAML_PATHS --parse-tags --no-debug
 
       - name: Lint Container
-        if: inputs.lint-container
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && inputs.lint-container }}
         run: bin/console lint:container
 
   # ===========================================================================
