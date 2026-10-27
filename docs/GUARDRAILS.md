@@ -14,11 +14,11 @@ Caller (`.github/workflows/pr-guardrail.yml`), die Logik bleibt zentral.
 | Regel | Prüft | Bei Verstoß |
 |---|---|---|
 | **R1** | Branch heißt `issue/<nummer>` (case-insensitive, Suffix erlaubt: `issue/123-dam-import`) | Verstoß |
-| **R2** | Das Issue `<nummer>` existiert in **diesem** Repo und ist offen (`require-issue-open`, Default: an). Eine PR-Nummer zählt nicht als Issue. Repos, deren Tickets woanders geführt werden (Manifest-Repos), suchen zuerst dort — siehe `issue-repo-strip-suffix`. | Verstoß |
-| **R3** | Titel-Autofix: Besteht der PR-Titel nur aus dem Branchnamen, wird er durch `#<nummer> <Issue-Titel>` ersetzt. Andere Titel werden **nie** angefasst. | Reparatur, kein Verstoß |
+| **R2** | Das Issue `<nummer>` existiert in **diesem** Repo und ist offen (`require-issue-open`, Default: an). Eine PR-Nummer zählt nicht als Issue. Repos, deren Tickets woanders geführt werden (Manifest-Repos), suchen zuerst dort — siehe `issue-repo-strip-suffix`. Ein Branch ohne Issue-Nummer (R1 verletzt) verletzt auch R2. | Verstoß |
+| **R3** | Titel-Autofix: Besteht der PR-Titel nur aus dem Branchnamen, wird er durch `#<nummer> <Issue-Titel>` ersetzt. Andere Titel werden **nie** angefasst. Ohne gültiges Issue (R1/R2 verletzt) kann der Titel nicht ersetzt werden; ein Titel, der nur der Branchname ist, wird dann gemeldet. | Reparatur; Verstoß, wenn sie nicht greifen kann |
 | **R4** | Die PR-Beschreibung enthält echten Fließtext (Default: mind. 50 Zeichen). HTML-Kommentare, Markdown-Überschriften und leere Checkboxen zählen nicht. | Verstoß |
-| **R5** | Alle Check-Runs und Commit-Statuses am Head-Commit sind grün, keine Merge-Konflikte. Laufende Checks lösen **nichts** aus — nur ein endgültiger Fehlschlag (`failure`, `cancelled`, `timed_out`) oder ein Konflikt zählt. | Verstoß |
-| **R6** | Fehlt eine Referenz (`Refs`/`Closes`) auf das Issue aus R1, hängt der Guardrail `Refs #<nummer>` an den PR-Body an — bewusst nicht `Closes`, der Merge soll das Ticket nicht von selbst schließen. Liegt das Issue in einem anderen Repo, qualifiziert: `Refs owner/repo#<nummer>`. | Reparatur, kein Verstoß |
+| **R5** | Alle Check-Runs und Commit-Statuses am Head-Commit sind grün, keine Merge-Konflikte. Laufende Checks lösen **nichts** aus — nur ein endgültiger Fehlschlag (`failure`, `cancelled`, `timed_out`) oder ein Konflikt zählt. Der Kommentar listet **jeden** fehlgeschlagenen Check mit Link auf sein Log; gleichnamige Jobs stehen in einer Zeile. | Verstoß |
+| **R6** | Fehlt eine Referenz (`Refs`/`Closes`) auf das Issue aus R1, hängt der Guardrail `Refs #<nummer>` an den PR-Body an — bewusst nicht `Closes`, der Merge soll das Ticket nicht von selbst schließen. Liegt das Issue in einem anderen Repo, qualifiziert: `Refs owner/repo#<nummer>`. Ohne gültiges Issue (R1/R2 verletzt) kann nichts angehängt werden; ein PR-Body ohne jede Issue-Referenz wird dann gemeldet. | Reparatur; Verstoß, wenn sie nicht greifen kann |
 
 ## Was passiert bei einem Verstoß?
 
@@ -33,7 +33,13 @@ Das hängt vom `enforce`-Input im Caller ab:
   bleibt **grün**, nichts wird blockiert.
 
 Der Kommentar ist immer derselbe (Marker `<!-- pr-guardrail -->`) und wird
-aktualisiert statt neu angelegt. Sind alle Regeln erfüllt, schrumpft er auf
+aktualisiert statt neu angelegt. Er beginnt mit einer Übersicht über **jede**
+Regel (erfüllt, verletzt, ausstehend, automatisch behoben, übersprungen) und
+gibt danach jeder verletzten Regel einen eigenen Abschnitt mit dem
+Handlungssatz. Die Regeln werden unabhängig voneinander geprüft: Eine
+verletzte Regel verdeckt keine andere, eine Runde zeigt alles, was zu beheben
+ist. Haben zwei gleichzeitig gestartete Läufe je einen Kommentar angelegt,
+löscht der nächste Lauf die Kopie. Sind alle Regeln erfüllt, schrumpft er auf
 eine kurze Erfolgsmeldung. Identischer Inhalt erzeugt keinen neuen
 API-Schreibzugriff — es gibt also keine Benachrichtigungs-Flut.
 

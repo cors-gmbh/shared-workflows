@@ -166,6 +166,7 @@ async function processPr({ api, prRef, event, eventName, cfg, ownJobNames }) {
 
   const commentBody = renderStatusComment({
     violations: result.violations,
+    ruleResults: result.ruleResults,
     ciPending: result.ciPending,
     enforce: cfg.enforce,
   })

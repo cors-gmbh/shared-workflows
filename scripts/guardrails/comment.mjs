@@ -16,12 +16,31 @@ export function renderSuccessComment() {
   return `${MARKER}\n✅ **PR Guardrail:** Alle Regeln erfüllt.`
 }
 
+const RESULT_LABELS = Object.freeze({
+  pass: '✅ erfüllt',
+  fail: '❌ verletzt',
+  pending: '⏳ ausstehend',
+  repaired: '🔧 automatisch behoben',
+  skipped: '➖ übersprungen',
+})
+
+/** Overview table with one row per rule (see evaluate().ruleResults). */
+function renderOverview(ruleResults) {
+  const rows = ruleResults.map(({ rule, title, status, note }) => {
+    const result = RESULT_LABELS[status] ?? status
+    return `| ${rule} | ${title} | ${note ? `${result} (${note})` : result} |`
+  })
+  return ['| Regel | Prüfung | Ergebnis |', '| --- | --- | --- |', ...rows]
+}
+
 /**
  * Render the sticky status comment for a set of violations.
  * `enforce` toggles between the blocking text (PR was converted to draft)
- * and the clearly marked hint mode.
+ * and the clearly marked hint mode. With `ruleResults` the comment opens
+ * with an overview of every rule, so it is visible at a glance that nothing
+ * was left out; each violated rule then gets its own section.
  */
-export function renderStatusComment({ violations, ciPending = false, enforce = false }) {
+export function renderStatusComment({ violations, ruleResults = [], ciPending = false, enforce = false }) {
   if (!violations || violations.length === 0) return renderSuccessComment()
 
   const lines = [MARKER, '## 🚦 PR Guardrail', '']
@@ -36,6 +55,8 @@ export function renderStatusComment({ violations, ciPending = false, enforce = f
     )
   }
   lines.push('')
+
+  if (ruleResults.length > 0) lines.push(...renderOverview(ruleResults), '')
 
   for (const v of violations) {
     lines.push(`### ❌ ${v.rule} — ${v.title}`, v.message, '', `➡️ ${v.action}`, '')
