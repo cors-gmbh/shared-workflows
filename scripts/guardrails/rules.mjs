@@ -9,6 +9,10 @@
 // Violation shape: { rule: 'R1', title: string, message: string, action: string }
 // `message` and `action` are developer-facing German texts that end up in the
 // sticky PR comment.
+//
+// Every rule is evaluated on its own and reported on its own: a failed rule
+// never hides the result of another one, so a single comment shows
+// everything that has to be fixed.
 
 export const DEFAULT_CONFIG = Object.freeze({
   enforce: false,
@@ -22,6 +26,16 @@ export const DEFAULT_CONFIG = Object.freeze({
   botRequireBody: false,
   bypassLabel: 'guardrail-bypass',
 })
+
+/** All rules in the order the sticky comment lists them. */
+export const RULES = Object.freeze([
+  Object.freeze({ rule: 'R1', title: 'Branch-Name' }),
+  Object.freeze({ rule: 'R2', title: 'Verknüpftes Issue' }),
+  Object.freeze({ rule: 'R3', title: 'Titel' }),
+  Object.freeze({ rule: 'R4', title: 'Beschreibung' }),
+  Object.freeze({ rule: 'R5', title: 'CI' }),
+  Object.freeze({ rule: 'R6', title: 'Issue-Referenz' }),
+])
 
 // --- R1: branch name ---------------------------------------------------------
 
@@ -63,7 +77,8 @@ export function checkBranch({ branch, branchPattern = DEFAULT_CONFIG.branchPatte
  * `issue` is the normalized lookup result:
  *   { exists: boolean, isPullRequest: boolean, state: 'OPEN'|'CLOSED'|null,
  *     title: string|null, repo: string|null }
- * A number that resolves to a pull request is NOT a valid issue.
+ * A number that resolves to a pull request is NOT a valid issue. Without an
+ * issue number (R1 failed) there is nothing to look up, which fails R2 too.
  * `searchedRepos` names the repositories that were searched, for the message.
  */
 export function checkIssue({
@@ -72,6 +87,16 @@ export function checkIssue({
   requireIssueOpen = DEFAULT_CONFIG.requireIssueOpen,
   searchedRepos = [],
 }) {
+  if (!issueNumber) {
+    return {
+      rule: 'R2',
+      title: 'Verknüpftes Issue',
+      message: 'Der Branch-Name enthält keine Issue-Nummer, der PR ist daher mit keinem Issue verknüpft.',
+      action:
+        'Benenne den Branch nach einem offenen Issue (siehe R1). Lege das Issue vorher an, falls es noch keines gibt.',
+    }
+  }
+
   // "in diesem Repository" is only true when nothing else was searched.
   const where =
     searchedRepos.length > 1
@@ -135,6 +160,26 @@ function normalizeForComparison(value) {
     .replace(/[\s_-]+/g, '-')
 }
 
+/** True when the PR title is nothing but the branch name (see normalizeForComparison). */
+export function isBranchNameTitle(title, branch) {
+  return normalizeForComparison(title) === normalizeForComparison(branch)
+}
+
+/**
+ * R3 without a valid issue: a title that is only the branch name cannot be
+ * repaired, because the issue title to put there is unknown.
+ */
+export function checkTitle({ title, branch }) {
+  if (!isBranchNameTitle(title, branch)) return null
+  return {
+    rule: 'R3',
+    title: 'Titel',
+    message:
+      'Der PR-Titel ist nur der Branch-Name. Der Guardrail ersetzt ihn durch den Issue-Titel, aber erst, wenn der PR mit einem gültigen Issue verknüpft ist (R1/R2).',
+    action: 'Behebe R1/R2, dann wird der Titel automatisch gesetzt, oder gib dem PR einen Titel, der sagt, was er ändert.',
+  }
+}
+
 /** Render the `title-template` input. Placeholders: {number}, {issueTitle}. */
 export function renderTitleTemplate(template, { number, issueTitle }) {
   return template.replaceAll('{number}', String(number)).replaceAll('{issueTitle}', issueTitle)
@@ -154,7 +199,7 @@ export function titleAutofix({
   titleTemplate = DEFAULT_CONFIG.titleTemplate,
 }) {
   if (!issueNumber || !issueTitle) return null
-  if (normalizeForComparison(title) !== normalizeForComparison(branch)) return null
+  if (!isBranchNameTitle(title, branch)) return null
   const fixed = renderTitleTemplate(titleTemplate, { number: issueNumber, issueTitle })
   return fixed === title ? null : fixed
 }
@@ -192,18 +237,26 @@ export function checkBody({ body, minBodyChars = DEFAULT_CONFIG.minBodyChars }) 
 
 /**
  * Map the GraphQL statusCheckRollup context nodes onto the neutral shape the
- * rule works with: { name, kind: 'check'|'status', state: 'success'|'failure'|'pending' }.
+ * rule works with:
+ *   { name, kind: 'check'|'status', state: 'success'|'failure'|'pending', url: string|null }.
  * Only definitive failures (FAILURE, CANCELLED, TIMED_OUT, STARTUP_FAILURE,
  * ERROR) map to 'failure'; everything unfinished or undecided is 'pending'.
+ * `url` points at the log of the job (check run) or the external CI page
+ * (commit status).
  */
 export function normalizeCheckContexts(nodes = []) {
   const result = []
   for (const node of nodes) {
     if (!node || !node.__typename) continue
     if (node.__typename === 'CheckRun') {
-      result.push({ name: node.name, kind: 'check', state: checkRunState(node) })
+      result.push({ name: node.name, kind: 'check', state: checkRunState(node), url: node.detailsUrl ?? null })
     } else if (node.__typename === 'StatusContext') {
-      result.push({ name: node.context, kind: 'status', state: statusContextState(node.state) })
+      result.push({
+        name: node.context,
+        kind: 'status',
+        state: statusContextState(node.state),
+        url: node.targetUrl ?? null,
+      })
     }
   }
   return result
@@ -240,6 +293,42 @@ function statusContextState(state) {
   }
 }
 
+// Check names and URLs come from whatever workflow or app reported them —
+// on a fork PR that is code the contributor controls. Keep a backtick from
+// ending the code span and only link plain https URLs.
+function codeSpan(text) {
+  return `\`${String(text ?? '').replaceAll('`', "'")}\``
+}
+
+function safeUrl(url) {
+  return typeof url === 'string' && /^https:\/\/[^\s<>]+$/.test(url) ? url : null
+}
+
+/**
+ * One list line per failed check name. Matrix jobs of different workflows
+ * can share a name; they are grouped on one line with a link per job instead
+ * of repeating the same text.
+ */
+function failedCheckLines(failed) {
+  const byName = new Map()
+  for (const check of failed) {
+    if (!byName.has(check.name)) byName.set(check.name, [])
+    byName.get(check.name).push(safeUrl(check.url))
+  }
+  const lines = []
+  for (const [name, urls] of byName) {
+    const links = urls.filter(Boolean)
+    if (urls.length === 1 && links.length === 1) {
+      lines.push(`- [${codeSpan(name)}](<${links[0]}>)`)
+    } else if (links.length > 0) {
+      lines.push(`- ${codeSpan(name)} — ${links.map((url, i) => `[Job ${i + 1}](<${url}>)`).join(', ')}`)
+    } else {
+      lines.push(`- ${codeSpan(name)}${urls.length > 1 ? ` (${urls.length}×)` : ''}`)
+    }
+  }
+  return lines
+}
+
 /**
  * R5 — every check run / commit status on the head SHA must succeed and the
  * PR must be free of merge conflicts.
@@ -250,7 +339,9 @@ function statusContextState(state) {
  *   - checks that are merely pending (or mergeable UNKNOWN) never produce a
  *     violation — the guardrail waits for the next check_suite/status event;
  *   - the guardrail's own check runs (ownCheckNames) are excluded, otherwise
- *     a failed guardrail run would keep the PR red forever.
+ *     a failed guardrail run would keep the PR red forever;
+ *   - every failed check is listed, each linked to its log, so one round
+ *     shows everything that has to be fixed.
  *
  * Returns { violations, pending }.
  */
@@ -262,12 +353,14 @@ export function checkCi({ checks = [], mergeable = 'UNKNOWN', ownCheckNames = []
 
   const violations = []
   if (failed.length > 0) {
-    const names = failed.map((c) => `\`${c.name}\``)
-    const shown = names.slice(0, 5).join(', ') + (names.length > 5 ? ` … (+${names.length - 5} weitere)` : '')
+    const heading =
+      failed.length === 1
+        ? '1 Check ist am aktuellen Stand fehlgeschlagen:'
+        : `${failed.length} Checks sind am aktuellen Stand fehlgeschlagen:`
     violations.push({
       rule: 'R5',
       title: 'CI',
-      message: `Fehlgeschlagene Checks am aktuellen Stand: ${shown}.`,
+      message: [heading, '', ...failedCheckLines(failed)].join('\n'),
       action:
         'Behebe die fehlgeschlagenen Checks und pushe den Fix. Der Guardrail prüft nach Abschluss der CI automatisch erneut.',
     })
@@ -296,6 +389,12 @@ function hasClosingKeywordFor(body, reference) {
   return re.test(body ?? '')
 }
 
+// The appended `Refs` line itself: without this check every run would add it again.
+function hasRefsFor(body, reference) {
+  const re = new RegExp(`\\brefs\\s*:?\\s+${escapeRegExp(reference)}\\b`, 'i')
+  return re.test(body ?? '')
+}
+
 /**
  * R6 — make sure GitHub links the PR to the issue from R1 (Development
  * sidebar, Projects automation). If neither the resolved
@@ -305,7 +404,7 @@ function hasClosingKeywordFor(body, reference) {
  * `issueRepo` is where the issue actually lives and `selfRepo` this PR's
  * repository (both `owner/name`). They differ for repos whose tickets are
  * tracked elsewhere; the reference then has to be qualified
- * (`Closes cors-gmbh/bellaflora#123`), because a bare `#123` would point at
+ * (`Refs cors-gmbh/bellaflora#123`), because a bare `#123` would point at
  * this repository. `linkedIssues` are the already resolved closing
  * references as { number, repo }.
  */
@@ -328,8 +427,30 @@ export function closingReference({
       linked.number === issueNumber && (!targetRepo || !linked.repo || linked.repo === targetRepo),
   )
   if (alreadyLinked) return null
-  if (hasClosingKeywordFor(body, reference)) return null
-  return `Closes ${reference}`
+  if (hasClosingKeywordFor(body, reference) || hasRefsFor(body, reference)) return null
+  // `Refs`, not `Closes`: a merge must not close the ticket on its own.
+  return `Refs ${reference}`
+}
+
+/**
+ * R6 without a valid issue: the reference cannot be appended, so the PR stays
+ * unlinked unless the body already references some issue on its own
+ * (closing keyword or `Refs`, bare or qualified with `owner/name`).
+ */
+export function checkClosingReference({ body, linkedIssues = [] }) {
+  if (linkedIssues.length > 0) return null
+  const anyReference = new RegExp(
+    `(?:${CLOSING_KEYWORD.source}|\\brefs\\s*:?\\s+)(?:[\\w.-]+/[\\w.-]+)?#\\d+\\b`,
+    'i',
+  )
+  if (anyReference.test(body ?? '')) return null
+  return {
+    rule: 'R6',
+    title: 'Issue-Referenz',
+    message:
+      'Der PR-Text verweist auf kein Issue (`Refs #<nummer>`), und der Guardrail kann den Verweis erst ergänzen, wenn der PR mit einem gültigen Issue verknüpft ist (R1/R2).',
+    action: 'Behebe R1/R2, dann wird der Verweis automatisch ergänzt, oder ergänze `Refs #<nummer>` im PR-Text.',
+  }
 }
 
 // --- Bot detection --------------------------------------------------------------
@@ -366,57 +487,77 @@ export function isBotAuthor(login, bots = DEFAULT_CONFIG.bots) {
  * @param {string[]} facts.searchedRepos   repositories searched for the issue (R2 message)
  * @param {object} config                  see DEFAULT_CONFIG
  *
- * @returns {{ isBot: boolean, issueNumber: number|null, violations: Array,
- *             ciPending: boolean, titleFix: string|null, appendClosing: string|null }}
+ * `ruleResults` holds one entry per rule of RULES, in that order:
+ *   { rule, title, status: 'pass'|'fail'|'pending'|'repaired'|'skipped', note: string|null }
+ * `violations` holds the details of every rule with status 'fail' (R5 can
+ * contribute two: failed checks and a merge conflict), in the same order.
+ *
+ * @returns {{ isBot: boolean, issueNumber: number|null, ruleResults: Array,
+ *             violations: Array, ciPending: boolean, titleFix: string|null,
+ *             appendClosing: string|null }}
  */
 export function evaluate(facts, config = {}) {
   const cfg = { ...DEFAULT_CONFIG, ...config }
   const isBot = isBotAuthor(facts.authorLogin, cfg.bots)
-  const violations = []
+  const results = new Map()
   let issueNumber = null
   let titleFix = null
   let appendClosing = null
 
+  const fail = (...violations) => ({ status: 'fail', note: null, violations })
+  const pass = () => ({ status: 'pass', note: null, violations: [] })
+  const skip = (note) => ({ status: 'skipped', note, violations: [] })
+  const repaired = (note) => ({ status: 'repaired', note, violations: [] })
+  const outcome = (violation) => (violation ? fail(violation) : pass())
+
   // Bot PRs (Renovate, Dependabot, the CD bot's sync PRs, ...) have no
   // issue/<n> branches and no tickets: R1-R3 and R6 are skipped by design.
-  if (!isBot) {
+  if (isBot) {
+    for (const rule of ['R1', 'R2', 'R3', 'R6']) results.set(rule, skip('Bot-PR'))
+  } else {
     const branchResult = checkBranch({ branch: facts.branch, branchPattern: cfg.branchPattern })
     issueNumber = branchResult.issueNumber
-    if (branchResult.violation) {
-      violations.push(branchResult.violation)
+    results.set('R1', outcome(branchResult.violation))
+
+    const issueViolation = checkIssue({
+      issueNumber,
+      issue: facts.issue,
+      requireIssueOpen: cfg.requireIssueOpen,
+      searchedRepos: facts.searchedRepos ?? [],
+    })
+    results.set('R2', outcome(issueViolation))
+
+    if (issueViolation) {
+      // Without a valid issue the repairs cannot run; whatever they would
+      // have fixed is reported instead of silently left as it is.
+      results.set('R3', outcome(checkTitle({ title: facts.title, branch: facts.branch })))
+      results.set('R6', outcome(checkClosingReference({ body: facts.body, linkedIssues: facts.linkedIssues ?? [] })))
     } else {
-      const issueViolation = checkIssue({
+      titleFix = titleAutofix({
+        title: facts.title,
+        branch: facts.branch,
         issueNumber,
-        issue: facts.issue,
-        requireIssueOpen: cfg.requireIssueOpen,
-        searchedRepos: facts.searchedRepos ?? [],
+        issueTitle: facts.issue?.title,
+        titleTemplate: cfg.titleTemplate,
       })
-      if (issueViolation) {
-        violations.push(issueViolation)
-      } else {
-        // Repairs only make sense against a valid issue reference.
-        titleFix = titleAutofix({
-          title: facts.title,
-          branch: facts.branch,
-          issueNumber,
-          issueTitle: facts.issue?.title,
-          titleTemplate: cfg.titleTemplate,
-        })
-        appendClosing = closingReference({
-          body: facts.body,
-          issueNumber,
-          issueRepo: facts.issue?.repo ?? null,
-          selfRepo: facts.selfRepo ?? null,
-          linkedIssues: facts.linkedIssues ?? [],
-        })
-      }
+      results.set('R3', titleFix ? repaired('durch den Issue-Titel ersetzt') : pass())
+      appendClosing = closingReference({
+        body: facts.body,
+        issueNumber,
+        issueRepo: facts.issue?.repo ?? null,
+        selfRepo: facts.selfRepo ?? null,
+        linkedIssues: facts.linkedIssues ?? [],
+      })
+      results.set('R6', appendClosing ? repaired(`\`${appendClosing}\` ergänzt`) : pass())
     }
   }
 
-  if (!isBot || cfg.botRequireBody) {
-    const bodyViolation = checkBody({ body: facts.body, minBodyChars: cfg.minBodyChars })
-    if (bodyViolation) violations.push(bodyViolation)
-  }
+  results.set(
+    'R4',
+    isBot && !cfg.botRequireBody
+      ? skip('Bot-PR')
+      : outcome(checkBody({ body: facts.body, minBodyChars: cfg.minBodyChars })),
+  )
 
   // R5 applies to everyone, bots included.
   const ci = checkCi({
@@ -424,7 +565,20 @@ export function evaluate(facts, config = {}) {
     mergeable: facts.mergeable,
     ownCheckNames: facts.ownCheckNames,
   })
-  violations.push(...ci.violations)
+  results.set(
+    'R5',
+    ci.violations.length > 0
+      ? fail(...ci.violations)
+      : ci.pending
+        ? { status: 'pending', note: 'Checks laufen noch', violations: [] }
+        : pass(),
+  )
 
-  return { isBot, issueNumber, violations, ciPending: ci.pending, titleFix, appendClosing }
+  const ruleResults = RULES.map(({ rule, title }) => {
+    const { status, note } = results.get(rule)
+    return { rule, title, status, note }
+  })
+  const violations = RULES.flatMap(({ rule }) => results.get(rule).violations)
+
+  return { isBot, issueNumber, ruleResults, violations, ciPending: ci.pending, titleFix, appendClosing }
 }

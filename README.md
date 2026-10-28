@@ -8,13 +8,14 @@ Reusable GitHub Actions workflows for CORS Pimcore projects and bundles.
 
 | Workflow | Replaces (GitLab) | Description |
 |---|---|---|
-| `php-test.yaml` | `test` stage (project + bundle) | ECS, PHPStan, Psalm, Twig/YAML/Container lint, Helm lint |
-| `containerize.yaml` | `build_and_push` stage | Multi-target Docker build, GHCR or GCP registry |
+| `project-ci.yaml` | `.project-gitlab-ci.yml` include | Test → Build → Manifest für Pimcore-Projekte in einem Aufruf. Der Caller `ci.yaml` ist in allen Projekt-Repos identisch (File-Sync); Registry-Pfad und Manifest-Repo werden aus dem Repo-Namen abgeleitet, Overrides per Repo-Variablen `GCP_REGISTRY_PATH`, `CD_REPO`, `NGINX_VERSION` |
+| `php-test.yaml` | `test` stage (project + bundle) | ECS, PHPStan, Psalm, Twig/YAML/Container lint, Helm lint, PHPUnit (unit and functional, see [PHPUnit](#phpunit)) |
+| `containerize.yaml` | `build_and_push` stage | Multi-target Docker build, GHCR or GCP registry; targets missing from the Dockerfile are skipped (pimcore-docker 9.x and 10.x projects) |
 | `update-manifest.yaml` | `update_manifest` stage | CD repo update via yq or helm template (GitOps) |
 | `frontend-build.yaml` | — | Build Pimcore Studio frontend (Rsbuild), type-check, commit assets |
 | `pr-guardrail.yml` | — | PR guardrails: branch/issue conventions, description, CI state ([docs](docs/GUARDRAILS.md)) |
 | `pr-to-project.yml` | — | Add PRs to the Projects-V2 boards of their linked issues |
-| `sync-files.yml` | — | Distribute guardrail callers + PR template to org repos (config: `.github/sync.yml`) |
+| `sync-files.yml` | — | Lebt in [`shared-workflows-private`](https://github.com/cors-gmbh/shared-workflows-private): verteilt Guardrail-Caller, PR-Template, CI-Caller (`ci.yaml`) und Dependency-Update-Caller in die Org-Repos (Konfiguration und Templates dort — die Repo-Liste bleibt privat) |
 
 ## Quick Start
 
@@ -82,6 +83,32 @@ jobs:
       composer_auth: ${{ secrets.COMPOSER_AUTH }}
 ```
 
+### PHPUnit
+
+`php-test.yaml` runs PHPUnit in two optional jobs. Both detect by themselves whether the repo has
+tests, so they can be enabled for repos without tests:
+
+- `phpunit: true` runs PHPUnit without database. Skipped when there is no `phpunit.xml(.dist)` or
+  no `*Test.php` below `tests/` outside the functional path. Default arguments:
+  `--exclude-testsuite functional`, override with `phpunit-args`.
+- `phpunit-functional: true` installs Pimcore against MySQL and OpenSearch service containers
+  (`vendor/bin/pimcore-install $pimcore-install-args`) and runs `phpunit-functional-args`
+  (default `--testsuite functional`) with `PIMCORE_FUNCTIONAL=1`. Skipped when
+  `phpunit-functional-path` (default `tests/Functional`) contains no `*Test.php`; an empty
+  directory with `.gitkeep` does not count. The kernel boots with `APP_ENV=dev` and the
+  registration from `env_local`, database and OpenSearch come from environment variables
+  (`DATABASE_URL`, `PIMCORE_OPENSEARCH_DSN`). `functional-opensearch-image: ''` skips OpenSearch.
+
+```yaml
+    with:
+      phpunit: true
+      phpunit-functional: true
+      pimcore-install-args: '--install-profile=App\InstallProfile\StudioInstallProfile'
+```
+
+Functional tests should skip themselves without `PIMCORE_FUNCTIONAL=1`, so a plain local
+`vendor/bin/phpunit` stays fast.
+
 ### Studio frontend build (`.github/workflows/frontend-build.yaml`)
 
 For bundles that ship a compiled Pimcore Studio frontend. Type-checks and builds
@@ -90,6 +117,14 @@ the frontend, and commits the produced public assets back to the release branch.
 Call it twice: pull requests verify only (`commit: false`), so their diffs stay
 limited to the actual source changes, and the assets are committed once per push
 to the release branch (`commit: true`, the default).
+
+The Studio bundle repos do not write this caller themselves: the file sync in
+`shared-workflows-private` distributes one `frontend-build.yaml` to every repo of
+the Studio bundle group. That caller fits every layout because the workflow
+resolves the npm project directory itself (`working-directory`: repository root
+or `assets/`) and stages the build archives with the default pathspec
+`*build-dist/*`. A repo only has to provide `npm run build` that produces
+`Resources/build-dist/build-<id>.zip` (see below).
 
 ```yaml
 name: Studio Frontend Build
@@ -137,6 +172,22 @@ Two things the consuming repo has to get right:
 - **Build id from the sources.** The build has to derive its output directory
   from a hash of the sources, not from a random uuid — otherwise every run
   rewrites every asset path and commits a diff that contains no real change.
+- **Prefer the build archive model.** Since `@pimcore/studio-ui-bundle` 2026.2
+  (and 2025.4.12) Pimcore ships `studio-package-build`, which packages a build
+  directory carrying a `.build-id` file into `Resources/build-dist/build-<id>.zip`
+  and keeps the archive of an unchanged id untouched. The expanded build under
+  `Resources/public/studio` stays gitignored and is extracted at cache warmup
+  by Pimcore's `BuildArchiveExtractor`: the bundle's `WebpackEntryPointProvider`
+  implements `BuildArchiveProviderInterface` through `BuildArchiveExtractionTrait`
+  and points at the archive glob and the target directory. With that model the
+  repository tracks one small zip per bundle instead of hundreds of asset files,
+  and this workflow commits only when a build id actually changed. Call it with
+  `file-pattern: 'src/Resources/build-dist/*'` (a git pathspec — `*` also
+  matches `/`, so a monorepo can pass `bundles/*/Resources/build-dist/*`) and
+  list only the Studio sources and the build configuration under `paths` of the
+  `push` trigger, so the archive commit never starts another run. Reference:
+  [cors-gmbh/pimcore-legacy-bundles](https://github.com/cors-gmbh/pimcore-legacy-bundles)
+  and the CoreShop bundles.
 - **Push access to the release branch.** Where a ruleset requires pull requests,
   `GITHUB_TOKEN` cannot push. Passing `gh_app_id`/`gh_app_private_key` (the CORS
   CD Bot) makes the commit with the app's installation token instead; the app is

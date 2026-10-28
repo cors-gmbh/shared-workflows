@@ -86,10 +86,12 @@ const PR_BUNDLE_QUERY = /* GraphQL */ `
                       name
                       status
                       conclusion
+                      detailsUrl
                     }
                     ... on StatusContext {
                       context
                       state
+                      targetUrl
                     }
                   }
                 }
@@ -149,10 +151,12 @@ const MORE_CONTEXTS_QUERY = /* GraphQL */ `
                       name
                       status
                       conclusion
+                      detailsUrl
                     }
                     ... on StatusContext {
                       context
                       state
+                      targetUrl
                     }
                   }
                 }
@@ -429,11 +433,21 @@ export class GitHubClient {
    */
   async upsertStickyComment(prNumber, marker, body, { createIfMissing = true } = {}) {
     const comments = await this.listComments(prNumber)
-    const existing = comments.find((c) => typeof c.body === 'string' && c.body.includes(marker))
+    const [existing, ...duplicates] = comments.filter((c) => typeof c.body === 'string' && c.body.includes(marker))
     if (!existing) {
       if (!createIfMissing) return 'skipped'
       await this.addComment(prNumber, body)
       return 'created'
+    }
+    // A pull_request_target run and a check_suite run sit in different
+    // concurrency groups. Started together, both find no comment and both
+    // create one; only the first is updated afterwards, so the copy would keep
+    // showing an outdated, shorter list of violations.
+    for (const duplicate of duplicates) {
+      if (duplicate.user?.login !== existing.user?.login) continue
+      await this.rest('DELETE', `/repos/${this.owner}/${this.repo}/issues/comments/${duplicate.id}`, {
+        allow404: true,
+      })
     }
     if (commentsEqual(existing.body, body)) return 'unchanged'
     await this.rest('PATCH', `/repos/${this.owner}/${this.repo}/issues/comments/${existing.id}`, {

@@ -7,18 +7,18 @@ Caller (`.github/workflows/pr-guardrail.yml`), die Logik bleibt zentral.
 
 - Reusable Workflows: [`pr-guardrail.yml`](../.github/workflows/pr-guardrail.yml), [`pr-to-project.yml`](../.github/workflows/pr-to-project.yml)
 - Regel-Logik + Tests: [`scripts/guardrails/`](../scripts/guardrails/)
-- Verteilung: [`sync-files.yml`](../.github/workflows/sync-files.yml) mit Konfiguration in [`.github/sync.yml`](../.github/sync.yml)
+- Verteilung: `sync-files.yml` mit Konfiguration `sync.yml` und den Caller-Templates in [`cors-gmbh/shared-workflows-private`](https://github.com/cors-gmbh/shared-workflows-private) — die Repo-Liste ist Kundeninformation und liegt deshalb nicht in diesem öffentlichen Repo
 
 ## Die Regeln
 
 | Regel | Prüft | Bei Verstoß |
 |---|---|---|
 | **R1** | Branch heißt `issue/<nummer>` (case-insensitive, Suffix erlaubt: `issue/123-dam-import`) | Verstoß |
-| **R2** | Das Issue `<nummer>` existiert in **diesem** Repo und ist offen (`require-issue-open`, Default: an). Eine PR-Nummer zählt nicht als Issue. Repos, deren Tickets woanders geführt werden (Manifest-Repos), suchen zuerst dort — siehe `issue-repo-strip-suffix`. | Verstoß |
-| **R3** | Titel-Autofix: Besteht der PR-Titel nur aus dem Branchnamen, wird er durch `#<nummer> <Issue-Titel>` ersetzt. Andere Titel werden **nie** angefasst. | Reparatur, kein Verstoß |
+| **R2** | Das Issue `<nummer>` existiert in **diesem** Repo und ist offen (`require-issue-open`, Default: an). Eine PR-Nummer zählt nicht als Issue. Repos, deren Tickets woanders geführt werden (Manifest-Repos), suchen zuerst dort — siehe `issue-repo-strip-suffix`. Ein Branch ohne Issue-Nummer (R1 verletzt) verletzt auch R2. | Verstoß |
+| **R3** | Titel-Autofix: Besteht der PR-Titel nur aus dem Branchnamen, wird er durch `#<nummer> <Issue-Titel>` ersetzt. Andere Titel werden **nie** angefasst. Ohne gültiges Issue (R1/R2 verletzt) kann der Titel nicht ersetzt werden; ein Titel, der nur der Branchname ist, wird dann gemeldet. | Reparatur; Verstoß, wenn sie nicht greifen kann |
 | **R4** | Die PR-Beschreibung enthält echten Fließtext (Default: mind. 50 Zeichen). HTML-Kommentare, Markdown-Überschriften und leere Checkboxen zählen nicht. | Verstoß |
-| **R5** | Alle Check-Runs und Commit-Statuses am Head-Commit sind grün, keine Merge-Konflikte. Laufende Checks lösen **nichts** aus — nur ein endgültiger Fehlschlag (`failure`, `cancelled`, `timed_out`) oder ein Konflikt zählt. | Verstoß |
-| **R6** | Fehlt eine Closing-Reference auf das Issue aus R1, hängt der Guardrail `Closes #<nummer>` an den PR-Body an (GitHub-Verknüpfung: Development-Sidebar, Projects-Automation). Liegt das Issue in einem anderen Repo, qualifiziert: `Closes owner/repo#<nummer>`. | Reparatur, kein Verstoß |
+| **R5** | Alle Check-Runs und Commit-Statuses am Head-Commit sind grün, keine Merge-Konflikte. Laufende Checks lösen **nichts** aus — nur ein endgültiger Fehlschlag (`failure`, `cancelled`, `timed_out`) oder ein Konflikt zählt. Der Kommentar listet **jeden** fehlgeschlagenen Check mit Link auf sein Log; gleichnamige Jobs stehen in einer Zeile. | Verstoß |
+| **R6** | Fehlt eine Referenz (`Refs`/`Closes`) auf das Issue aus R1, hängt der Guardrail `Refs #<nummer>` an den PR-Body an — bewusst nicht `Closes`, der Merge soll das Ticket nicht von selbst schließen. Liegt das Issue in einem anderen Repo, qualifiziert: `Refs owner/repo#<nummer>`. Ohne gültiges Issue (R1/R2 verletzt) kann nichts angehängt werden; ein PR-Body ohne jede Issue-Referenz wird dann gemeldet. | Reparatur; Verstoß, wenn sie nicht greifen kann |
 
 ## Was passiert bei einem Verstoß?
 
@@ -33,7 +33,13 @@ Das hängt vom `enforce`-Input im Caller ab:
   bleibt **grün**, nichts wird blockiert.
 
 Der Kommentar ist immer derselbe (Marker `<!-- pr-guardrail -->`) und wird
-aktualisiert statt neu angelegt. Sind alle Regeln erfüllt, schrumpft er auf
+aktualisiert statt neu angelegt. Er beginnt mit einer Übersicht über **jede**
+Regel (erfüllt, verletzt, ausstehend, automatisch behoben, übersprungen) und
+gibt danach jeder verletzten Regel einen eigenen Abschnitt mit dem
+Handlungssatz. Die Regeln werden unabhängig voneinander geprüft: Eine
+verletzte Regel verdeckt keine andere, eine Runde zeigt alles, was zu beheben
+ist. Haben zwei gleichzeitig gestartete Läufe je einen Kommentar angelegt,
+löscht der nächste Lauf die Kopie. Sind alle Regeln erfüllt, schrumpft er auf
 eine kurze Erfolgsmeldung. Identischer Inhalt erzeugt keinen neuen
 API-Schreibzugriff — es gibt also keine Benachrichtigungs-Flut.
 
@@ -83,9 +89,10 @@ wieder normal.
 
 Die synchronisierten Caller stehen auf `enforce: true` — Verstöße blockieren
 also von Anfang an. Umgestellt wird **zentral** in
-`templates/pr-guardrail.yml` in diesem Repo — der nächste Sync verteilt die
-Änderung. Einzelne Repos oder Gruppen können abweichen, indem man ihnen in
-`.github/sync.yml` ein eigenes Template mit anderen Inputs zuweist.
+`templates/pr-guardrail.yml` in `shared-workflows-private` — der nächste Sync
+verteilt die Änderung. Einzelne Repos oder Gruppen können abweichen, indem man
+ihnen in der dortigen `sync.yml` ein eigenes Template mit anderen Inputs
+zuweist.
 
 ### Manifest-Repos: `templates/pr-guardrail-manifest.yml`
 
@@ -102,8 +109,8 @@ Die Reihenfolge ist wichtig, weil kleine Nummern in beiden Repos existieren
 können; das Projekt-Repo gewinnt. Der Branch bleibt `issue/<nummer>` — die
 Konvention ändert sich für Entwickler nicht.
 
-R6 ergänzt die Closing-Referenz dann **qualifiziert**
-(`Closes cors-gmbh/bellaflora#123`), weil ein nacktes `#123` auf das
+R6 ergänzt die Referenz dann **qualifiziert**
+(`Refs cors-gmbh/bellaflora#123`), weil ein nacktes `#123` auf das
 Manifest-Repo zeigen würde. Der Token bekommt zusätzlich Lesezugriff auf das
 Projekt-Repo (siehe Schritt „Resolve token repositories" im Reusable Workflow).
 
@@ -178,8 +185,8 @@ automatisch aus dem App-Slug).
 
 1. Prüfen, dass die **App im Ziel-Repo installiert** ist und die Org-Secrets
    `GH_APP_ID`/`GH_APP_PRIVATE_KEY` dort sichtbar sind (siehe oben).
-2. In [`.github/sync.yml`](../.github/sync.yml) das Repo in die passende
-   Gruppe eintragen (Projekt-Repos, Bundle-Repos, Dev-/Infrastruktur-Repos,
+2. In `.github/sync.yml` in [`shared-workflows-private`](https://github.com/cors-gmbh/shared-workflows-private)
+   das Repo in die passende Gruppe eintragen (Projekt-Repos, Bundle-Repos, Dev-/Infrastruktur-Repos,
    sonstige Anwendungs-Repos, öffentliche OSS-Repos oder Manifest-Repos). Achtung: innerhalb
    der `repos: |`-Blöcke sind keine Kommentare möglich.
 3. Falls das Repo schon ein eigenes `PULL_REQUEST_TEMPLATE.md` im Root oder in
@@ -202,14 +209,60 @@ läuft aber unabhängig vom Guardrail — zum Deaktivieren den Job
 tut der Job nichts und bleibt grün (idempotent). Voraussetzung: Die App hat
 die Organization-Permission **Projects: Read & Write**.
 
+## `pr-jira-link.yml`
+
+Für Projekte, deren Tickets noch in Jira liegen (Branches wie
+`RON-229-stage` statt `issue/<n>`) und die deshalb nicht im Guardrail
+stehen. Der Workflow sucht den Jira-Key im Branch-Namen (case-insensitive)
+und im PR-Titel (nur Großbuchstaben) und schreibt einen verwalteten Block
+an den Anfang der PR-Beschreibung:
+
+> 🎫 **Jira:** [RON-229](https://economix.atlassian.net/browse/RON-229) — Zusammenfassung · _Status_
+
+- **Mit Jira-Zugang** (Org-Secrets `JIRA_USER_EMAIL` + `JIRA_API_TOKEN`,
+  über `secrets: inherit`) wird jeder Key in Jira nachgeschlagen: nur
+  existierende Tickets werden verlinkt, mit Zusammenfassung und Status.
+  Schlägt der Lookup fehl, bleibt es beim reinen Link, der Job bleibt grün.
+- Das Token ist ein **scoped API-Token** mit `read:jira-work` (Account mit
+  Leserechten auf die Projekte). Scoped Tokens gehen nur über das Gateway
+  `api.atlassian.com/ex/jira/<cloudId>`; die Cloud-ID holt der Workflow
+  selbst aus `<jira-base-url>/_edge/tenant_info`. Ein normales (unscoped)
+  Token funktioniert über diesen Weg nicht.
+- **Ohne Jira-Zugang** wird der Key ungeprüft verlinkt.
+- Der Block steht zwischen `<!-- jira-link:start -->` und
+  `<!-- jira-link:end -->` und wird bei jedem `opened`/`edited`/`reopened`
+  neu geschrieben; der Rest der Beschreibung bleibt unangetastet. Ohne Key
+  verschwindet ein alter Block wieder. Bot-PRs werden übersprungen.
+- Geschrieben wird mit dem `GITHUB_TOKEN` des Callers (`pull-requests:
+  write`), dadurch löst die Änderung keinen neuen Lauf aus.
+- Inputs: `jira-base-url` (Default `https://economix.atlassian.net`),
+  `project-keys` (z. B. `RON,TIL`, leer = jeder Key).
+
+Verteilt wird der Caller `templates/pr-jira-link.yml` aus
+`shared-workflows-private` an die von GitLab migrierten Projekte. Wechselt
+ein Projekt auf GitHub-Issues, fliegt es dort raus und kommt in Gruppe 1.
+
 ## Versionierung
 
-Die Caller referenzieren `cors-gmbh/shared-workflows/...@v1` — ein **Tag**,
-kein Branch. Breaking Changes an Inputs oder Verhalten ⇒ neues Major-Tag
-(`v2`) und Umstellung über die Templates. Kompatible Fixes ⇒ `v1`-Tag auf den
-neuen Commit verschieben. Das Checkout der Skripte im Reusable Workflow hängt
-über `github.job_workflow_sha` am selben Commit wie das Tag — Workflow und
-Skripte sind damit immer konsistent versioniert.
+Die Caller referenzieren `cors-gmbh/shared-workflows/...@main`, wie die
+CI-, Dependency-Update- und Frontend-Build-Caller auch. Jeder Merge auf
+`main` ist damit sofort in allen Repos live — kein Tag, das nachgezogen
+werden muss (das frühere `@v1` blieb monatelang stehen, neue Inputs und
+Workflows kamen nie an). Das Checkout der Skripte im Reusable Workflow hängt
+über `github.job_workflow_sha` am selben Commit wie der Workflow selbst —
+Workflow und Skripte sind damit immer konsistent.
+
+Folgen für Änderungen hier:
+
+- **Kompatibel bleiben.** Neue Inputs brauchen einen Default, der das
+  bisherige Verhalten beibehält; Inputs nicht umbenennen oder entfernen,
+  solange ein Template sie übergibt.
+- **Breaking Changes** nur zusammen mit dem Template-Update in
+  `shared-workflows-private`: erst den Workflow so erweitern, dass alter und
+  neuer Caller funktionieren, dann die Templates umstellen (Sync), danach
+  das Alte entfernen.
+- **Neue Reusable Workflows** zuerst hier mergen, dann den Caller in die
+  Sync-Gruppen aufnehmen — sonst zeigt der verteilte Caller ins Leere.
 
 > Damit andere Repos die Reusable Workflows überhaupt aufrufen dürfen, muss
 > in diesem Repo unter **Settings → Actions → General → Access** die Option
@@ -219,9 +272,9 @@ Skripte sind damit immer konsistent versioniert.
 
 | Symptom | Ursache / Lösung |
 |---|---|
-| Guardrail läuft gar nicht | Caller-Datei im Ziel-Repo vorhanden? `v1`-Tag existiert? Access-Setting (s. o.) aktiv? |
+| Guardrail läuft gar nicht | Caller-Datei im Ziel-Repo vorhanden? Referenziert sie `@main` (alte Caller mit `@v1` neu syncen)? Access-Setting (s. o.) aktiv? |
 | „Create app token“ schlägt fehl | App nicht im Repo installiert oder Org-Secrets nicht freigegeben. |
 | Kommentar erscheint nicht, Job grün | PR ist Draft (wird übersprungen) oder CI läuft noch (R5 wartet). |
 | Bypass-Label wird sofort entfernt | Absender hat weder `admin` noch `maintain` — so soll es sein. |
 | Collaborator-Check antwortet 403 | App-Permission „Administration: Read“ ergänzen. |
-| Sync-PR fehlt im Ziel-Repo | Repo in `.github/sync.yml` eingetragen? Lauf von `sync-files.yml` prüfen (Push auf `main` mit Template-Änderung oder `workflow_dispatch`). |
+| Sync-PR fehlt im Ziel-Repo | Repo in der `sync.yml` von `shared-workflows-private` eingetragen? Lauf von `sync-files.yml` dort prüfen (Push auf `main` mit Template-Änderung oder `workflow_dispatch`). |
