@@ -80,6 +80,16 @@ on:
         required: false
         type: boolean
         default: true
+      symfony-lsp:
+        description: "Run symfony lsp:check (Symfony-aware diagnostics: routes, templates, translations, services, config)"
+        required: false
+        type: boolean
+        default: false
+      symfony-lsp-args:
+        description: "Extra arguments for symfony lsp:check (e.g. paths, --source-only, --baseline=..., --fail-on=...)"
+        required: false
+        type: string
+        default: ""
       # --- PHPUnit ---
       phpunit:
         description: "Run PHPUnit without database. Skipped when the repo has no phpunit.xml(.dist) or no *Test.php outside phpunit-functional-path, so it is safe to enable for repos without tests"
@@ -209,6 +219,7 @@ jobs:
           php-version: ${{ needs.resolve-versions.outputs.php-version }}
           extensions: ctype, iconv, pdo_mysql, intl, zip, gd, mbstring, dom, xml
           coverage: none
+          tools: ${{ inputs.symfony-lsp && 'symfony-cli' || 'none' }}
 
       - name: Get composer cache directory
         id: composer-cache
@@ -298,6 +309,13 @@ jobs:
       - name: Lint Container
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && inputs.lint-container }}
         run: bin/console lint:container
+
+      - name: Symfony LSP check
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && inputs.symfony-lsp }}
+        env:
+          LSP_ARGS: ${{ inputs.symfony-lsp-args }}
+        # --format=github turns diagnostics into inline PR annotations.
+        run: symfony lsp:check --format=github $LSP_ARGS
 
   # ===========================================================================
   # PHPStan (separate job — runs in parallel with lint)
