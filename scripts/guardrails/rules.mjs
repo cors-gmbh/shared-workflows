@@ -25,6 +25,10 @@ export const DEFAULT_CONFIG = Object.freeze({
   bots: Object.freeze(['renovate[bot]', 'dependabot[bot]', 'github-actions[bot]']),
   botRequireBody: false,
   bypassLabel: 'guardrail-bypass',
+  // Long-lived environment branches. A PR from one of them into another
+  // (staging -> main, main -> staging) promotes or syncs work that already
+  // went through its own issue PRs.
+  promotionBranches: Object.freeze(['main', 'master', 'staging', 'stage', 'develop', 'dev']),
 })
 
 /** All rules in the order the sticky comment lists them. */
@@ -466,6 +470,28 @@ export function isBotAuthor(login, bots = DEFAULT_CONFIG.bots) {
   return normalized !== '' && bots.some((bot) => normalizeLogin(bot) === normalized)
 }
 
+// --- Promotion detection ------------------------------------------------------------
+
+/**
+ * True for a PR between two long-lived environment branches of the same
+ * repository (staging -> main, a main -> staging back-merge, ...). Its
+ * commits arrived through their own issue PRs, so there is no ticket of its
+ * own to name in the branch or reference in the body.
+ *
+ * A fork can name its branch `staging` too; only a head branch in this very
+ * repository counts, and only people with write access can push there.
+ */
+export function isPromotionPr({
+  branch,
+  baseBranch,
+  isCrossRepository,
+  promotionBranches = DEFAULT_CONFIG.promotionBranches,
+}) {
+  if (isCrossRepository !== false) return false
+  if (!branch || !baseBranch || branch === baseBranch) return false
+  return promotionBranches.includes(branch) && promotionBranches.includes(baseBranch)
+}
+
 // --- Master evaluation ------------------------------------------------------------
 
 /**
@@ -474,6 +500,8 @@ export function isBotAuthor(login, bots = DEFAULT_CONFIG.bots) {
  *
  * @param {object} facts
  * @param {string} facts.branch            head branch name
+ * @param {string} facts.baseBranch        base branch name
+ * @param {boolean} facts.isCrossRepository head branch lives in a fork
  * @param {string} facts.title             PR title
  * @param {string|null} facts.body         PR body
  * @param {string} facts.authorLogin       PR author login
@@ -492,13 +520,21 @@ export function isBotAuthor(login, bots = DEFAULT_CONFIG.bots) {
  * `violations` holds the details of every rule with status 'fail' (R5 can
  * contribute two: failed checks and a merge conflict), in the same order.
  *
- * @returns {{ isBot: boolean, issueNumber: number|null, ruleResults: Array,
- *             violations: Array, ciPending: boolean, titleFix: string|null,
- *             appendClosing: string|null }}
+ * @returns {{ isBot: boolean, isPromotion: boolean, issueNumber: number|null,
+ *             ruleResults: Array, violations: Array, ciPending: boolean,
+ *             titleFix: string|null, appendClosing: string|null }}
  */
 export function evaluate(facts, config = {}) {
   const cfg = { ...DEFAULT_CONFIG, ...config }
   const isBot = isBotAuthor(facts.authorLogin, cfg.bots)
+  const isPromotion =
+    !isBot &&
+    isPromotionPr({
+      branch: facts.branch,
+      baseBranch: facts.baseBranch,
+      isCrossRepository: facts.isCrossRepository,
+      promotionBranches: cfg.promotionBranches,
+    })
   const results = new Map()
   let issueNumber = null
   let titleFix = null
@@ -512,8 +548,13 @@ export function evaluate(facts, config = {}) {
 
   // Bot PRs (Renovate, Dependabot, the CD bot's sync PRs, ...) have no
   // issue/<n> branches and no tickets: R1-R3 and R6 are skipped by design.
+  // Promotion PRs (staging -> main, ...) carry work that already passed its
+  // own issue PRs; they are checked like bot PRs, minus the body rule.
+  const promotionNote = `Promotion \`${facts.branch}\` → \`${facts.baseBranch}\``
   if (isBot) {
     for (const rule of ['R1', 'R2', 'R3', 'R6']) results.set(rule, skip('Bot-PR'))
+  } else if (isPromotion) {
+    for (const rule of ['R1', 'R2', 'R3', 'R6']) results.set(rule, skip(promotionNote))
   } else {
     const branchResult = checkBranch({ branch: facts.branch, branchPattern: cfg.branchPattern })
     issueNumber = branchResult.issueNumber
@@ -556,7 +597,9 @@ export function evaluate(facts, config = {}) {
     'R4',
     isBot && !cfg.botRequireBody
       ? skip('Bot-PR')
-      : outcome(checkBody({ body: facts.body, minBodyChars: cfg.minBodyChars })),
+      : isPromotion
+        ? skip(promotionNote)
+        : outcome(checkBody({ body: facts.body, minBodyChars: cfg.minBodyChars })),
   )
 
   // R5 applies to everyone, bots included.
@@ -580,5 +623,5 @@ export function evaluate(facts, config = {}) {
   })
   const violations = RULES.flatMap(({ rule }) => results.get(rule).violations)
 
-  return { isBot, issueNumber, ruleResults, violations, ciPending: ci.pending, titleFix, appendClosing }
+  return { isBot, isPromotion, issueNumber, ruleResults, violations, ciPending: ci.pending, titleFix, appendClosing }
 }

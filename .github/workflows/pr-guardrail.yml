@@ -52,6 +52,14 @@ on:
         type: boolean
         required: false
         default: false
+      promotion-branches:
+        description: >-
+          Comma-separated long-lived branches. A PR from one of them into another one of the same repo
+          (staging -> main, a main -> staging back-merge) skips R1-R4 and R6; R5 (CI) still applies.
+          Fork branches never count. Empty = no exemption.
+        type: string
+        required: false
+        default: 'main,master,staging,stage,develop,dev'
       bypass-label:
         description: "Label that lets repo admins/maintainers bypass the guardrail (audited)."
         type: string
@@ -137,4 +145,5 @@ jobs:
           INPUT_BOT_REQUIRE_BODY: ${{ inputs.bot-require-body }}
           INPUT_BYPASS_LABEL: ${{ inputs.bypass-label }}
           INPUT_ISSUE_REPO_STRIP_SUFFIX: ${{ inputs.issue-repo-strip-suffix }}
+          INPUT_PROMOTION_BRANCHES: ${{ inputs.promotion-branches }}
         run: node scripts/guardrails/run-guardrail.mjs
