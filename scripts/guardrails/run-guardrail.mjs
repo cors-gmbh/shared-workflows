@@ -41,6 +41,11 @@ function readConfig() {
     botRequireBody: boolEnv('INPUT_BOT_REQUIRE_BODY', DEFAULT_CONFIG.botRequireBody),
     bypassLabel: env('INPUT_BYPASS_LABEL', DEFAULT_CONFIG.bypassLabel),
     issueRepoStripSuffix: env('INPUT_ISSUE_REPO_STRIP_SUFFIX', ''),
+    // Read raw: an explicitly empty input switches the promotion exemption off.
+    promotionBranches: (process.env.INPUT_PROMOTION_BRANCHES ?? DEFAULT_CONFIG.promotionBranches.join(','))
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
   }
 }
 
@@ -114,6 +119,8 @@ async function processPr({ api, prRef, event, eventName, cfg, ownJobNames }) {
   const result = evaluate(
     {
       branch: pr.branch,
+      baseBranch: pr.baseBranch,
+      isCrossRepository: pr.isCrossRepository,
       title: pr.title,
       body: pr.body,
       authorLogin: pr.authorLogin,

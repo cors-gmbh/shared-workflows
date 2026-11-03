@@ -52,6 +52,8 @@ const PR_BUNDLE_QUERY = /* GraphQL */ `
         body
         headRefName
         headRefOid
+        baseRefName
+        isCrossRepository
         author {
           __typename
           login
@@ -319,6 +321,9 @@ export class GitHubClient {
         body: prNode.body ?? '',
         branch: prNode.headRefName,
         headSha: prNode.headRefOid,
+        baseBranch: prNode.baseRefName,
+        // Unknown counts as a fork: the promotion exemption needs a definite false.
+        isCrossRepository: prNode.isCrossRepository ?? true,
         authorLogin: prNode.author?.login ?? '',
         mergeable: prNode.mergeable ?? 'UNKNOWN',
         labels: (prNode.labels?.nodes ?? []).map((l) => l.name),

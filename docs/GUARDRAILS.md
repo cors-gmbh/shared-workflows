@@ -68,6 +68,21 @@ Der CORS CD Bot selbst (Absender der File-Sync-PRs) wird zur Laufzeit
 automatisch in die Bot-Liste aufgenommen — der Guardrail verschluckt sich
 nicht an seinen eigenen Sync-PRs.
 
+### Promotion-PRs (`staging` → `main`)
+
+Ein PR zwischen zwei langlebigen Umgebungs-Branches, also ein Release
+`staging` → `main` oder ein Back-Merge `main` → `staging`, hat kein eigenes
+Ticket: Seine Commits sind schon über ihre `issue/<n>`-PRs gekommen. Für ihn
+werden **R1–R4 und R6 übersprungen**. Die CI-Regel (**R5**) gilt weiterhin:
+Rote Checks oder ein Merge-Konflikt blockieren auch ein Release.
+
+Als Umgebungs-Branches gelten `main`, `master`, `staging`, `stage`, `develop`
+und `dev` (Input `promotion-branches`, kommagetrennt, exakte Namen). Head-
+**und** Base-Branch müssen in der Liste stehen. Ein `hotfix/…`- oder
+`release/…`-Branch zählt also nicht. Der Head-Branch muss im selben Repo
+liegen: Ein Fork-Branch namens `staging` wird normal geprüft. Ein leerer
+Input schaltet die Ausnahme ab.
+
 ## Admin-Bypass
 
 Es gibt genau **einen** Bypass-Mechanismus: das Label **`guardrail-bypass`**.

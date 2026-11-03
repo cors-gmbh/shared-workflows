@@ -13,6 +13,7 @@ import {
   evaluate,
   extractIssueNumber,
   isBotAuthor,
+  isPromotionPr,
   normalizeCheckContexts,
   strippedBody,
   titleAutofix,
@@ -544,6 +545,39 @@ describe('isBotAuthor', () => {
 // evaluate — integration of all rules
 // ---------------------------------------------------------------------------
 
+describe('isPromotionPr', () => {
+  const same = { isCrossRepository: false }
+
+  it('accepts staging -> main and the main -> staging back-merge', () => {
+    assert.equal(isPromotionPr({ ...same, branch: 'staging', baseBranch: 'main' }), true)
+    assert.equal(isPromotionPr({ ...same, branch: 'main', baseBranch: 'staging' }), true)
+    assert.equal(isPromotionPr({ ...same, branch: 'develop', baseBranch: 'master' }), true)
+  })
+
+  it('rejects a branch outside the list on either side', () => {
+    assert.equal(isPromotionPr({ ...same, branch: 'issue/12', baseBranch: 'main' }), false)
+    assert.equal(isPromotionPr({ ...same, branch: 'staging', baseBranch: 'issue/12' }), false)
+    assert.equal(isPromotionPr({ ...same, branch: 'hotfix/login', baseBranch: 'main' }), false)
+  })
+
+  it('rejects a fork branch named like an environment branch', () => {
+    assert.equal(isPromotionPr({ branch: 'staging', baseBranch: 'main', isCrossRepository: true }), false)
+  })
+
+  it('rejects an unknown fork state', () => {
+    assert.equal(isPromotionPr({ branch: 'staging', baseBranch: 'main' }), false)
+  })
+
+  it('is exact and honors a custom list; an empty list disables it', () => {
+    assert.equal(isPromotionPr({ ...same, branch: 'Staging', baseBranch: 'main' }), false)
+    assert.equal(
+      isPromotionPr({ ...same, branch: 'prod-stage', baseBranch: 'prod', promotionBranches: ['prod', 'prod-stage'] }),
+      true,
+    )
+    assert.equal(isPromotionPr({ ...same, branch: 'staging', baseBranch: 'main', promotionBranches: [] }), false)
+  })
+})
+
 describe('evaluate', () => {
   const greenChecks = [{ name: 'build', kind: 'check', state: 'success' }]
   const humanFacts = {
@@ -668,5 +702,49 @@ describe('evaluate', () => {
       mergeable: 'CONFLICTING',
     })
     assert.deepEqual(result.violations.map((v) => v.rule), ['R2', 'R4', 'R5', 'R5', 'R6'])
+  })
+
+  const promotionFacts = {
+    ...humanFacts,
+    branch: 'staging',
+    baseBranch: 'main',
+    isCrossRepository: false,
+    title: 'Staging -> Main',
+    body: 'Release von Stage auf Prod',
+    issue: null,
+  }
+
+  it('promotion PR: R1-R4 and R6 skipped, no repairs', () => {
+    const result = evaluate(promotionFacts)
+    assert.equal(result.isPromotion, true)
+    assert.deepEqual(result.violations, [])
+    assert.deepEqual(
+      result.ruleResults.map((r) => `${r.rule}:${r.status}`),
+      ['R1:skipped', 'R2:skipped', 'R3:skipped', 'R4:skipped', 'R5:pass', 'R6:skipped'],
+    )
+    assert.equal(result.ruleResults[0].note, 'Promotion `staging` → `main`')
+    assert.equal(result.titleFix, null)
+    assert.equal(result.appendClosing, null)
+  })
+
+  it('promotion PR: R5 still applies', () => {
+    const result = evaluate({
+      ...promotionFacts,
+      checks: [{ name: 'build', kind: 'check', state: 'failure', url: null }],
+      mergeable: 'CONFLICTING',
+    })
+    assert.deepEqual(result.violations.map((v) => v.rule), ['R5', 'R5'])
+  })
+
+  it('promotion from a fork is checked like any other PR', () => {
+    const result = evaluate({ ...promotionFacts, isCrossRepository: true })
+    assert.equal(result.isPromotion, false)
+    assert.deepEqual(result.violations.map((v) => v.rule), ['R1', 'R2', 'R4', 'R6'])
+  })
+
+  it('promotion exemption off with an empty list', () => {
+    const result = evaluate(promotionFacts, { promotionBranches: [] })
+    assert.equal(result.isPromotion, false)
+    assert.deepEqual(result.violations.map((v) => v.rule), ['R1', 'R2', 'R4', 'R6'])
   })
 })
