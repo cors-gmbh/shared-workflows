@@ -85,6 +85,20 @@ on:
         required: false
         type: string
         default: ""
+      # --- Maintenance page ---
+      maintenance:
+        description: >-
+          Build & push the maintenance page in .maintenance/ (index.html plus any assets it references) as
+          <registry>/maintenance:<tag>, on top of maintenance-base-image. Repos without .maintenance/index.html,
+          or still carrying their own .maintenance/Dockerfile, are left alone.
+        required: false
+        type: boolean
+        default: true
+      maintenance-base-image:
+        description: "Base image for the maintenance page (private GHCR package, the repo needs read access to it)"
+        required: false
+        type: string
+        default: "ghcr.io/cors-gmbh/maintenance-page:1"
       # --- Manifest / CD (forwarded to update-manifest.yaml) ---
       update-manifest:
         description: "Bump image tags in the CD/ArgoCD manifest repo after build"
@@ -223,11 +237,99 @@ jobs:
       gcp_credentials: ${{ secrets.gcp_credentials }}
       npm_github_pat: ${{ secrets.npm_github_pat }}
 
+  # --- Maintenance page: .maintenance/ copied onto the shared base image ---
+  # Same tag as the Pimcore image, which is what the manifest's maintenance
+  # deployment pulls. Skipping happens per step, not per job: a skipped job
+  # would also skip update-manifest, which needs this one.
+  maintenance:
+    name: "Maintenance page"
+    needs: prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: .maintenance
+
+      - name: Detect page
+        id: page
+        env:
+          ENABLED: ${{ inputs.maintenance }}
+          BASE_IMAGE: ${{ inputs.maintenance-base-image }}
+        run: |
+          if [ "$ENABLED" != "true" ]; then
+            echo "Disabled via the maintenance input."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          elif [ ! -f .maintenance/index.html ]; then
+            echo "No .maintenance/index.html, nothing to build."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          elif [ -f .maintenance/Dockerfile ]; then
+            echo "::notice title=Maintenance page::.maintenance/Dockerfile found: legacy setup, built by the repo's own workflow. Delete .maintenance/{Dockerfile,server.go,go.mod,go.sum} and .github/workflows/maintenance.yaml to build on ${BASE_IMAGE}."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            printf 'FROM %s\nCOPY . /www/\n' "$BASE_IMAGE" > "$RUNNER_TEMP/Dockerfile.maintenance"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.page.outputs.build == 'true'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR (base image)
+        if: steps.page.outputs.build == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to GCP Artifact Registry
+        if: steps.page.outputs.build == 'true' && inputs.registry == 'gcp'
+        env:
+          GCP_CREDENTIALS: ${{ secrets.gcp_credentials }}
+          GCP_REGISTRY_URL: ${{ inputs.gcp-registry-url }}
+        run: |
+          echo "$GCP_CREDENTIALS" | base64 -d | \
+            docker login -u _json_key --password-stdin "https://${GCP_REGISTRY_URL}"
+
+      - name: Resolve image
+        id: image
+        if: steps.page.outputs.build == 'true'
+        env:
+          REGISTRY_TYPE: ${{ inputs.registry }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          GCP_REGISTRY_URL: ${{ inputs.gcp-registry-url }}
+          GCP_REGISTRY_PATH: ${{ needs.prep.outputs.registry-path }}
+          TAG: ${{ needs.prep.outputs.tag }}
+        run: |
+          # Same prefix as containerize.yaml, so the page lands next to the Pimcore image.
+          if [ "$REGISTRY_TYPE" = "ghcr" ]; then
+            prefix="ghcr.io/$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')"
+          else
+            prefix="${GCP_REGISTRY_URL}/${GCP_REGISTRY_PATH}"
+          fi
+          echo "ref=${prefix}/maintenance:${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push
+        if: steps.page.outputs.build == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .maintenance
+          file: ${{ runner.temp }}/Dockerfile.maintenance
+          pull: true
+          push: true
+          provenance: false
+          tags: ${{ steps.image.outputs.ref }}
+
   # --- Bump image tags in the CD/manifest repo (after build) ---
   update-manifest:
     name: "Update manifest"
     if: inputs.update-manifest
-    needs: [prep, build]
+    needs: [prep, build, maintenance]
     uses: ./.github/workflows/update-manifest.yaml
     with:
       container-tag: ${{ needs.prep.outputs.tag }}

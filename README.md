@@ -237,6 +237,30 @@ Two things the consuming repo has to get right:
 - `CD_PUSH_TOKEN` — PAT with write access to the CD/manifest repo
 - OR: configure a GitHub App and set `GH_APP_ID` (variable) + `GH_APP_PRIVATE_KEY` (secret)
 
+### Maintenance page
+
+`project-ci.yaml` also builds the project's maintenance page, so a project only keeps
+the page itself:
+
+```
+.maintenance/
+  index.html      required
+  style.css …     optional, anything index.html references
+```
+
+On push, after the tests, the job `maintenance` copies `.maintenance/` onto
+`ghcr.io/cors-gmbh/maintenance-page:1` (a static server on distroless, port 8085, answers
+503 with `index.html` and serves the referenced files) and pushes it as
+`<registry>/maintenance:<branch>-<sha8>`, the same tag as the Pimcore image. The manifest
+update waits for it.
+
+- The base image is a private package: add the project repo under its *Package settings →
+  Manage Actions access* (role *Read*), otherwise the build cannot pull it.
+- A repo that still has its own `.maintenance/Dockerfile` is skipped with a notice, so its
+  own maintenance workflow keeps building until the switch. Switching = deleting
+  `.maintenance/{Dockerfile,server.go,go.mod,go.sum}` and `.github/workflows/maintenance.yaml`.
+- `maintenance: false` turns the job off, `maintenance-base-image` pins another base.
+
 ## Repo access
 
 For **private** repos calling these workflows, enable access in this repo:
