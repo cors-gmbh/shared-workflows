@@ -254,8 +254,8 @@ On push, after the tests, the job `maintenance` copies `.maintenance/` onto
 `<registry>/maintenance:<branch>-<sha8>`, the same tag as the Pimcore image. The manifest
 update waits for it.
 
-- The base image is a private package: add the project repo under its *Package settings →
-  Manage Actions access* (role *Read*), otherwise the build cannot pull it.
+- The base image is a public package (its source repo is private), so no per-repo access
+  grant is needed.
 - A repo that still has its own `.maintenance/Dockerfile` is skipped with a notice, so its
   own maintenance workflow keeps building until the switch. Switching = deleting
   `.maintenance/{Dockerfile,server.go,go.mod,go.sum}` and `.github/workflows/maintenance.yaml`.

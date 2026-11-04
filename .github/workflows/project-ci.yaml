@@ -95,7 +95,7 @@ on:
         type: boolean
         default: true
       maintenance-base-image:
-        description: "Base image for the maintenance page (private GHCR package, the repo needs read access to it)"
+        description: "Base image for the maintenance page (public GHCR package, source in cors-gmbh/maintenance-page)"
         required: false
         type: string
         default: "ghcr.io/cors-gmbh/maintenance-page:1"
