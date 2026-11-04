@@ -164,9 +164,11 @@ jobs:
       env_local: ${{ secrets.env_local }}
 
   # --- Resolve image tag (<branch>-<short-sha>), APP_ENV and project targets (push + build only) ---
+  # workflow_dispatch counts as a push: the caller's paths-ignore skips chore-only pushes, a manual
+  # run rebuilds and deploys anyway (e.g. to pick up a new base image), but only on PROD/STAGE branch.
   prep:
     name: "Resolve tag & env"
-    if: github.event_name == 'push' && inputs.build
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && inputs.build
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -184,12 +186,16 @@ jobs:
           STAGE_BRANCH: ${{ vars.STAGE_BRANCH || 'staging' }}
           REF: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
         run: |
           echo "tag=${REF}-${SHA:0:8}" >> "$GITHUB_OUTPUT"
           if [ "$REF" = "$PROD_BRANCH" ]; then
             env=prod
           elif [ "$REF" = "$STAGE_BRANCH" ]; then
             env=staging
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "::error title=Manual build::'${REF}' is neither PROD_BRANCH (${PROD_BRANCH}) nor STAGE_BRANCH (${STAGE_BRANCH}): a manual run only builds and deploys those."
+            exit 1
           else
             env="$REF"
           fi
