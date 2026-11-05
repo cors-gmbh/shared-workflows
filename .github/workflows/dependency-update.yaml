@@ -10,6 +10,17 @@ name: "🔄 Dependency update"
 # never 9.x -> 10.x; majors need the migration script) and runs the updates
 # inside that new image, so composer.lock is validated against it.
 #
+# DOCKER_NGINX_VERSION in .env is optional (without it project-ci's nginx default
+# applies, and this workflow does not add it). When it is set, the project builds
+# ghcr.io/cors-gmbh/pimcore-docker/nginx:<nginx>-<base>, and pimcore-docker does not
+# build every nginx line for every release. So:
+#   - with docker-nginx-update (default: on) it is bumped to the newest stable
+#     (even minor) nginx line published for the target release, never downgraded;
+#     a mainline line (odd minor) is never chosen, one already in .env stays until
+#     a newer stable line exists;
+#   - before DOCKER_BASE_IMAGE is bumped, the nginx image for the new pair must exist
+#     in the registry, otherwise the base stays where it is (reason in the job summary).
+#
 # The PR is created with the org GitHub App token (GH_APP_ID / GH_APP_PRIVATE_KEY),
 # so CI runs on it (PRs created with GITHUB_TOKEN never trigger workflows) and the
 # PR guardrail treats it as a bot PR.
@@ -28,7 +39,7 @@ on:
   workflow_call:
     inputs:
       env-file:
-        description: "dotenv file with DOCKER_PHP_VERSION / DOCKER_ALPINE_VERSION / DOCKER_BASE_IMAGE"
+        description: "dotenv file with DOCKER_PHP_VERSION / DOCKER_ALPINE_VERSION / DOCKER_BASE_IMAGE (optional: DOCKER_NGINX_VERSION)"
         required: false
         type: string
         default: ".env"
@@ -39,6 +50,11 @@ on:
         default: true
       docker-base-update:
         description: "Bump DOCKER_BASE_IMAGE in .env to the newest pimcore-docker release of the same major"
+        required: false
+        type: boolean
+        default: true
+      docker-nginx-update:
+        description: "With docker-base-update: bump DOCKER_NGINX_VERSION in .env (only if present) to the newest stable nginx line built for the target release. Off = keep it, it is still checked before the base bump"
         required: false
         type: boolean
         default: true
@@ -94,12 +110,16 @@ jobs:
       php-image: ${{ steps.env.outputs.php_image }}
       base-current: ${{ steps.env.outputs.base_current }}
       base-target: ${{ steps.env.outputs.base_target }}
+      nginx-current: ${{ steps.env.outputs.nginx_current }}
+      nginx-target: ${{ steps.env.outputs.nginx_target }}
+      docker-note: ${{ steps.env.outputs.docker_note }}
     steps:
       - uses: actions/checkout@v7
       - id: env
         env:
           ENV_FILE: ${{ inputs.env-file }}
           BASE_UPDATE: ${{ inputs.docker-base-update }}
+          NGINX_UPDATE: ${{ inputs.docker-nginx-update }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -a; . "./$ENV_FILE"; set +a
@@ -116,7 +136,84 @@ jobs:
               target="$latest"
             fi
           fi
+
+          # nginx: only when .env pins DOCKER_NGINX_VERSION (otherwise project-ci's default applies).
+          # The project builds nginx:<nginx>-<base>; which lines exist per release is read from the
+          # public registry, since pimcore-docker's NGINX_VERSIONS differ between releases.
+          nginx_current="${DOCKER_NGINX_VERSION:-}"
+          nginx_target="$nginx_current"
+          note=""
+          if [ -n "$nginx_current" ]; then
+            nginx_repo="cors-gmbh/pimcore-docker/nginx"
+            nginx_tags() {
+              local tok next hdr page
+              tok="$(curl -fsS "https://ghcr.io/token?scope=repository:${nginx_repo}:pull" | jq -r '.token // empty')"
+              [ -n "$tok" ] || return 1
+              hdr="$(mktemp)"
+              next="/v2/${nginx_repo}/tags/list?n=1000"
+              while [ -n "$next" ]; do
+                page="$(curl -fsS -D "$hdr" -H "Authorization: Bearer $tok" "https://ghcr.io${next}")" || return 1
+                printf '%s\n' "$page" | jq -r '.tags[]?'
+                next="$(tr -d '\r' < "$hdr" | sed -nE 's/^[Ll]ink: *<([^>]*)>.*rel="next".*/\1/p')"
+              done
+              rm -f "$hdr"
+            }
+            # nginx_for BASE: the nginx line to build with pimcore-docker BASE, empty if no image fits.
+            # Keeps the current line unless the update is on and a stable (even minor) line at least
+            # as new is published for BASE; never downgrades, never picks a mainline (odd) line.
+            nginx_for() {
+              printf '%s\n' "$tags" | awk -v sfx="-$1" -v cur="$nginx_current" -v bump="$bump_nginx" '
+                BEGIN { split(cur, c, "."); semver = (cur ~ /^[0-9]+\.[0-9]+$/) }
+                length($0) > length(sfx) && substr($0, length($0) - length(sfx) + 1) == sfx {
+                  line = substr($0, 1, length($0) - length(sfx))
+                  if (line == cur) have = 1
+                  if (bump != "true" || !semver || line !~ /^[0-9]+\.[0-9]+$/) next
+                  split(line, v, "."); maj = v[1] + 0; min = v[2] + 0
+                  if (min % 2 != 0) next
+                  if (maj < c[1] + 0 || (maj == c[1] + 0 && min < c[2] + 0)) next
+                  if (best == "" || maj > bmaj || (maj == bmaj && min > bmin)) { best = line; bmaj = maj; bmin = min }
+                }
+                END { if (best != "") print best; else if (have) print cur }'
+            }
+            bump_nginx="false"
+            [ "$BASE_UPDATE" = "true" ] && [ "$NGINX_UPDATE" = "true" ] && bump_nginx="true"
+            if ! tags="$(nginx_tags)" || [ -z "$tags" ]; then
+              # nothing to verify against: base and nginx stay as they are
+              note="Die Tags von ghcr.io/${nginx_repo} waren nicht lesbar, \`DOCKER_NGINX_VERSION=$nginx_current\` ist ungeprüft."
+              if [ "$target" != "$DOCKER_BASE_IMAGE" ]; then
+                note="$note Basisimage deshalb nicht gehoben ($DOCKER_BASE_IMAGE → $target wäre möglich)."
+              fi
+              target="$DOCKER_BASE_IMAGE"
+            else
+              nginx_target="$(nginx_for "$target")"
+              if [ -z "$nginx_target" ] && [ "$target" != "$DOCKER_BASE_IMAGE" ]; then
+                note="Basisimage nicht gehoben ($DOCKER_BASE_IMAGE → $target wäre möglich): \`nginx:${nginx_current}-${target}\` gibt es nicht"
+                if [ "$bump_nginx" = "true" ]; then note="$note, und für $target ist keine stabile nginx-Linie ab $nginx_current gebaut"; fi
+                note="$note."
+                target="$DOCKER_BASE_IMAGE"
+                nginx_target="$(nginx_for "$target")"
+              fi
+              if [ -z "$nginx_target" ]; then
+                note="${note:+$note }\`nginx:${nginx_current}-${target}\` gibt es nicht, \`DOCKER_NGINX_VERSION\` bitte prüfen."
+                nginx_target="$nginx_current"
+              fi
+            fi
+          fi
           [ "$target" != "$DOCKER_BASE_IMAGE" ] && echo "DOCKER_BASE_IMAGE: $DOCKER_BASE_IMAGE -> $target"
+          [ "$nginx_target" != "$nginx_current" ] && echo "DOCKER_NGINX_VERSION: $nginx_current -> $nginx_target"
+          if [ -n "$note" ]; then echo "::warning title=dependency-update::$note"; fi
+          change() { if [ "$2" = "$3" ]; then echo "- $1: \`$2\` (unverändert)"; else echo "- $1: \`$2\` → \`$3\`"; fi; }
+          {
+            echo "### Docker-Versionen (\`$ENV_FILE\`)"
+            echo
+            change pimcore-docker "$DOCKER_BASE_IMAGE" "$target"
+            if [ -n "$nginx_current" ]; then
+              change nginx "$nginx_current" "$nginx_target"
+            else
+              echo "- nginx: kein \`DOCKER_NGINX_VERSION\`, es gilt der Default aus project-ci"
+            fi
+            if [ -n "$note" ]; then echo; echo "> $note"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
           # pimcore-docker >= 10 ships one image (pimcore-slim is enough for composer/npm), 9.x has php-cli
           if [ "$major" -ge 10 ]; then image="pimcore-slim"; else image="php-cli"; fi
@@ -124,6 +221,9 @@ jobs:
             echo "php_image=ghcr.io/cors-gmbh/pimcore-docker/${image}:${DOCKER_PHP_VERSION}-alpine${DOCKER_ALPINE_VERSION}-${target}"
             echo "base_current=$DOCKER_BASE_IMAGE"
             echo "base_target=$target"
+            echo "nginx_current=$nginx_current"
+            echo "nginx_target=$nginx_target"
+            echo "docker_note=$note"
           } >> "$GITHUB_OUTPUT"
 
   update:
@@ -159,6 +259,13 @@ jobs:
           TARGET: ${{ needs.versions.outputs.base-target }}
         run: sed -i -E "s/^(DOCKER_BASE_IMAGE=).*/\1${TARGET}/" "$ENV_FILE"
 
+      - name: Bump DOCKER_NGINX_VERSION
+        if: needs.versions.outputs.nginx-target != needs.versions.outputs.nginx-current
+        env:
+          ENV_FILE: ${{ inputs.env-file }}
+          TARGET: ${{ needs.versions.outputs.nginx-target }}
+        run: sed -i -E "s/^(DOCKER_NGINX_VERSION=).*/\1${TARGET}/" "$ENV_FILE"
+
       - name: composer update
         if: inputs.composer
         env:
@@ -182,13 +289,28 @@ jobs:
           ENV_FILE: ${{ inputs.env-file }}
           BASE_CURRENT: ${{ needs.versions.outputs.base-current }}
           BASE_TARGET: ${{ needs.versions.outputs.base-target }}
+          NGINX_CURRENT: ${{ needs.versions.outputs.nginx-current }}
+          NGINX_TARGET: ${{ needs.versions.outputs.nginx-target }}
+          DOCKER_NOTE: ${{ needs.versions.outputs.docker-note }}
         run: |
+          changes=""
+          if [ "$BASE_TARGET" != "$BASE_CURRENT" ]; then changes="pimcore-docker $BASE_CURRENT → $BASE_TARGET"; fi
+          if [ "$NGINX_TARGET" != "$NGINX_CURRENT" ]; then changes="${changes:+$changes, }nginx $NGINX_CURRENT → $NGINX_TARGET"; fi
+          echo "title=Update dependencies${changes:+ ($changes)}" >> "$GITHUB_OUTPUT"
           {
             echo 'body<<EOF'
             echo 'Automatisches Dependency-Update (`composer update`'"${NPM_DIR:+ + \`npm update\` in \`$NPM_DIR\`}"'), erstellt vom Shared Workflow `dependency-update`.'
             if [ "$BASE_TARGET" != "$BASE_CURRENT" ]; then
               echo
               echo "Basisimage: pimcore-docker \`$BASE_CURRENT\` → \`$BASE_TARGET\` (\`DOCKER_BASE_IMAGE\` in \`$ENV_FILE\`); composer/npm liefen bereits im neuen Image."
+            fi
+            if [ "$NGINX_TARGET" != "$NGINX_CURRENT" ]; then
+              echo
+              echo "nginx: \`$NGINX_CURRENT\` → \`$NGINX_TARGET\` (\`DOCKER_NGINX_VERSION\` in \`$ENV_FILE\`), die neueste stabile Linie, die pimcore-docker für \`$BASE_TARGET\` baut."
+            fi
+            if [ -n "$DOCKER_NOTE" ]; then
+              echo
+              echo "> $DOCKER_NOTE"
             fi
             echo
             echo '```'
@@ -211,7 +333,7 @@ jobs:
           branch: ${{ inputs.branch }}
           delete-branch: true
           commit-message: "Update dependencies"
-          title: "Update dependencies"
+          title: ${{ steps.summary.outputs.title }}
           body: ${{ steps.summary.outputs.body }}
           labels: ${{ inputs.labels }}
           assignees: ${{ inputs.assignees }}
