@@ -81,7 +81,7 @@ on:
         type: string
         default: "Dockerfile"
       nginx-version:
-        description: "NGINX_VERSION build arg (usually not in .env). Default: repo variable NGINX_VERSION, else 1.29"
+        description: "NGINX_VERSION build arg when .env has no DOCKER_NGINX_VERSION (.env wins). Default: repo variable NGINX_VERSION, else 1.30"
         required: false
         type: string
         default: ""
@@ -208,7 +208,7 @@ jobs:
           # Lets the caller ci.yaml stay identical across projects (file sync).
           REGISTRY_PATH: ${{ inputs.gcp-registry-path || vars.GCP_REGISTRY_PATH }}
           CD_REPO: ${{ inputs.cd-repo || vars.CD_REPO }}
-          NGINX: ${{ inputs.nginx-version || vars.NGINX_VERSION || '1.29' }}
+          NGINX: ${{ inputs.nginx-version || vars.NGINX_VERSION || '1.30' }}
           REPO: ${{ github.event.repository.name }}
         run: |
           # Registry paths must be lowercase; repo names may not be (e.g. ZeroRidge).
