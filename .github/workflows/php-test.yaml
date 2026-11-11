@@ -131,6 +131,17 @@ on:
         required: false
         type: string
         default: "opensearchproject/opensearch:2.13.0"
+      # --- Mutation testing ---
+      infection:
+        description: "Run Infection (mutation testing) on the unit tests. Skipped when the repo has no unit tests (see phpunit) or no infection.json5/infection.json(.dist), so it is safe to enable for repos without it"
+        required: false
+        type: boolean
+        default: false
+      infection-args:
+        description: "Extra arguments for vendor/bin/infection (e.g. --git-diff-lines --git-diff-base=origin/main). Thresholds belong in the repo's Infection config"
+        required: false
+        type: string
+        default: ""
     secrets:
       composer_auth:
         description: "Composer auth JSON for private packages (base — e.g. org-wide cors.repo.packagist token)"
@@ -157,6 +168,7 @@ jobs:
       php-version: ${{ steps.v.outputs.php }}
       has-unit-tests: ${{ steps.t.outputs.unit }}
       has-functional-tests: ${{ steps.t.outputs.functional }}
+      has-infection-config: ${{ steps.t.outputs.infection }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -195,9 +207,18 @@ jobs:
               functional=true
             fi
           fi
-          echo "PHPUnit tests: unit=${unit} functional=${functional}"
-          echo "unit=${unit}" >> "$GITHUB_OUTPUT"
-          echo "functional=${functional}" >> "$GITHUB_OUTPUT"
+          infection=false
+          for config in infection.json5 infection.json5.dist infection.json infection.json.dist; do
+            if [ -f "$config" ]; then
+              infection=true
+            fi
+          done
+          echo "PHPUnit tests: unit=${unit} functional=${functional}, Infection config: ${infection}"
+          {
+            echo "unit=${unit}"
+            echo "functional=${functional}"
+            echo "infection=${infection}"
+          } >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
   # ECS + Symfony Linting (Twig, YAML, Container)
@@ -561,6 +582,88 @@ jobs:
           vendor/bin/phpunit $PHPUNIT_ARGS
 
   # ===========================================================================
+  # Mutation testing (Infection) on the unit tests
+  # ===========================================================================
+  infection:
+    name: "Infection"
+    if: inputs.infection && needs.resolve-versions.outputs.has-unit-tests == 'true' && needs.resolve-versions.outputs.has-infection-config == 'true'
+    needs: resolve-versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history, so --git-diff-lines/--git-diff-filter in infection-args find their base
+          fetch-depth: 0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ needs.resolve-versions.outputs.php-version }}
+          extensions: ctype, iconv, pdo_mysql, intl, zip, gd, mbstring, dom, xml
+          coverage: pcov
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache composer dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ steps.composer-cache.outputs.dir }}
+            vendor
+          key: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-php${{ needs.resolve-versions.outputs.php-version }}-
+
+      - name: Setup composer auth
+        env:
+          BASE: ${{ secrets.composer_auth }}
+          EXTRA: ${{ secrets.composer_auth_extra }}
+        run: |
+          # Deep-merge base + extra (extra wins on host conflicts) into a single
+          # COMPOSER_AUTH for all following steps. One authoritative source — no
+          # ambiguity between env and auth.json file precedence.
+          merged=$(jq -cn --argjson a "${BASE:-{\}}" --argjson b "${EXTRA:-{\}}" '$a * $b')
+          echo "::add-mask::$merged"
+          echo "COMPOSER_AUTH=$merged" >> "$GITHUB_ENV"
+          echo "Composed COMPOSER_AUTH from $(jq -rn --argjson a "${BASE:-{\}}" '($a["http-basic"]//{}|keys|length)') base + $(jq -rn --argjson b "${EXTRA:-{\}}" '($b["http-basic"]//{}|keys|length)') extra host(s)"
+
+      - name: Composer install
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Write .env.local
+        env:
+          ENV_LOCAL: ${{ secrets.env_local }}
+        run: |
+          # Lines with an empty value (KEY=) are dropped: an unset repo secret must not
+          # override a value the project ships in its committed .env.
+          printf '%s\n' "$ENV_LOCAL" | grep -Ev '^[A-Za-z_][A-Za-z0-9_]*=\s*$' | grep -v '^\s*$' > .env.local || true
+          if [ -s .env.local ]; then
+            echo "Wrote .env.local ($(grep -c '=' .env.local) variables)"
+          else
+            rm -f .env.local
+            echo "No .env.local written (no non-empty variables)"
+          fi
+
+      - name: Build Pimcore classes
+        if: inputs.pimcore
+        run: PIMCORE_DISABLE_CACHE=1 bin/console pimcore:build:classes --env=dev
+        env:
+          APP_ENV: dev
+
+      - name: Infection
+        env:
+          INFECTION_ARGS: ${{ inputs.infection-args }}
+        run: |
+          # Test suite, source and thresholds (minMsi/minCoveredMsi) come from the repo's
+          # Infection config; surviving mutants are annotated on the PR via --logger-github.
+          vendor/bin/infection --threads=max --no-progress --no-interaction --logger-github $INFECTION_ARGS
+
+  # ===========================================================================
   # PHPUnit functional tests against an installed Pimcore (MySQL + OpenSearch)
   # ===========================================================================
   phpunit-functional:
@@ -685,7 +788,7 @@ jobs:
   complete:
     name: "Tests Complete"
     if: always()
-    needs: [lint, phpstan, psalm, phpunit, phpunit-functional]
+    needs: [lint, phpstan, psalm, phpunit, phpunit-functional, infection]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -698,8 +801,9 @@ jobs:
           PSALM_RESULT: ${{ needs.psalm.result }}
           PHPUNIT_RESULT: ${{ needs.phpunit.result }}
           PHPUNIT_FUNCTIONAL_RESULT: ${{ needs.phpunit-functional.result }}
+          INFECTION_RESULT: ${{ needs.infection.result }}
         run: |
-          for result in "$LINT_RESULT" "$PHPSTAN_RESULT" "$PSALM_RESULT" "$PHPUNIT_RESULT" "$PHPUNIT_FUNCTIONAL_RESULT"; do
+          for result in "$LINT_RESULT" "$PHPSTAN_RESULT" "$PSALM_RESULT" "$PHPUNIT_RESULT" "$PHPUNIT_FUNCTIONAL_RESULT" "$INFECTION_RESULT"; do
             if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
               echo "Job failed or was cancelled: $result"
               exit 1

@@ -9,7 +9,7 @@ Reusable GitHub Actions workflows for CORS Pimcore projects and bundles.
 | Workflow | Replaces (GitLab) | Description |
 |---|---|---|
 | `project-ci.yaml` | `.project-gitlab-ci.yml` include | Test → Build → Manifest für Pimcore-Projekte in einem Aufruf. Der Caller `ci.yaml` ist in allen Projekt-Repos identisch (File-Sync); Registry-Pfad und Manifest-Repo werden aus dem Repo-Namen abgeleitet, Overrides per Repo-Variablen `GCP_REGISTRY_PATH`, `CD_REPO`, `NGINX_VERSION` |
-| `php-test.yaml` | `test` stage (project + bundle) | ECS, PHPStan, Psalm, Twig/YAML/Container lint, Helm lint, PHPUnit (unit and functional, see [PHPUnit](#phpunit)) |
+| `php-test.yaml` | `test` stage (project + bundle) | ECS, PHPStan, Psalm, Twig/YAML/Container lint, Helm lint, PHPUnit (unit and functional, see [PHPUnit](#phpunit)), Infection (see [Mutation testing](#mutation-testing)) |
 | `containerize.yaml` | `build_and_push` stage | Multi-target Docker build, GHCR or GCP registry; targets missing from the Dockerfile are skipped (pimcore-docker 9.x and 10.x projects) |
 | `update-manifest.yaml` | `update_manifest` stage | CD repo update via yq or helm template (GitOps) |
 | `frontend-build.yaml` | — | Build Pimcore Studio frontend (Rsbuild), type-check, commit assets |
@@ -108,6 +108,30 @@ tests, so they can be enabled for repos without tests:
 
 Functional tests should skip themselves without `PIMCORE_FUNCTIONAL=1`, so a plain local
 `vendor/bin/phpunit` stays fast.
+
+`project-ci.yaml` forwards all PHPUnit inputs (`phpunit`, `phpunit-args`, `phpunit-functional`,
+`phpunit-functional-path`, `phpunit-functional-args`, `pimcore-install-args`) to `php-test.yaml`.
+
+### Mutation testing
+
+`infection: true` runs [Infection](https://infection.github.io) on the unit tests in its own job
+(PHP with `pcov`). Skipped when the unit PHPUnit job would be skipped or the repo has no
+`infection.json5`, `infection.json5.dist`, `infection.json` or `infection.json.dist`, so it can be
+enabled for every repo. Test suite, source directories and the thresholds (`minMsi`,
+`minCoveredMsi`) belong in the repo's Infection config — the job fails when the config's
+thresholds are missed. Surviving mutants are annotated on the PR (`--logger-github`).
+`infection-args` adds arguments, e.g. only mutating the lines a PR changed (`base_ref` is empty on
+push, so the expression falls back to the whole code base there):
+
+```yaml
+    with:
+      phpunit: true
+      infection: true
+      infection-args: ${{ github.event_name == 'pull_request' && format('--git-diff-lines --git-diff-base=origin/{0}', github.base_ref) || '' }}
+```
+
+The checkout has the full history, so `--git-diff-*` finds its base. Both inputs are also
+forwarded by `project-ci.yaml`.
 
 ### Studio frontend build (`.github/workflows/frontend-build.yaml`)
 

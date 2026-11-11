@@ -56,6 +56,46 @@ on:
         required: false
         type: string
         default: ""
+      phpunit:
+        description: "Run PHPUnit without database (skipped when the repo has no unit tests, see php-test.yaml)"
+        required: false
+        type: boolean
+        default: false
+      phpunit-args:
+        description: "Arguments for the PHPUnit job. Empty = all test suites except \"functional\""
+        required: false
+        type: string
+        default: ""
+      phpunit-functional:
+        description: "Run functional PHPUnit tests against an installed Pimcore (skipped when phpunit-functional-path has no tests)"
+        required: false
+        type: boolean
+        default: false
+      phpunit-functional-path:
+        description: "Directory of the functional tests (detection only)"
+        required: false
+        type: string
+        default: "tests/Functional"
+      phpunit-functional-args:
+        description: "Arguments for the functional PHPUnit job"
+        required: false
+        type: string
+        default: "--testsuite functional"
+      pimcore-install-args:
+        description: "Arguments for vendor/bin/pimcore-install in the functional job"
+        required: false
+        type: string
+        default: ""
+      infection:
+        description: "Run Infection (mutation testing) on the unit tests (skipped without unit tests or Infection config)"
+        required: false
+        type: boolean
+        default: false
+      infection-args:
+        description: "Extra arguments for vendor/bin/infection"
+        required: false
+        type: string
+        default: ""
       # --- Build (forwarded to containerize.yaml) ---
       build:
         description: "Build & push a container image on push (after tests)"
@@ -158,6 +198,14 @@ jobs:
       lint-container: ${{ inputs.lint-container }}
       symfony-lsp: ${{ inputs.symfony-lsp }}
       symfony-lsp-args: ${{ inputs.symfony-lsp-args }}
+      phpunit: ${{ inputs.phpunit }}
+      phpunit-args: ${{ inputs.phpunit-args }}
+      phpunit-functional: ${{ inputs.phpunit-functional }}
+      phpunit-functional-path: ${{ inputs.phpunit-functional-path }}
+      phpunit-functional-args: ${{ inputs.phpunit-functional-args }}
+      pimcore-install-args: ${{ inputs.pimcore-install-args }}
+      infection: ${{ inputs.infection }}
+      infection-args: ${{ inputs.infection-args }}
     secrets:
       composer_auth: ${{ secrets.composer_auth }}
       composer_auth_extra: ${{ secrets.composer_auth_extra }}
