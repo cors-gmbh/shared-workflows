@@ -167,10 +167,13 @@ caller `secobserve-scan.yml` (from `shared-workflows-private`) scans again every
 | `SECOBSERVE_API_TOKEN` | secret (org) | user with the `Upload` role in the products |
 | `SECOBSERVE_SCAN` | variable (repo) | `image` or `app`; not set = no scan |
 | `SECOBSERVE_PRODUCT` | variable (repo) | product name, default: repository name |
+| `SECOBSERVE_PRODUCT_GROUP` | variable (org/repo) | product group for new products, default: none |
 | `SECOBSERVE_REFS` | variable (repo) | nightly scan: JSON list of branches, default `[PROD_BRANCH, STAGE_BRANCH]` |
 
-The product has to exist in SecObserve (the import does not create it); the branch is the git
-branch (`master`, `staging`) and is created on the first import. A project that the operator
+A missing product is created before the import (the import itself does not create products),
+in the product group `SECOBSERVE_PRODUCT_GROUP` if set; the API user then needs permission to
+create products (`create-product: false` turns it off). The branch is the git branch
+(`master`, `staging`) and is created on the first import. A project that the operator
 already covers should not be scanned here as well: both would report the same findings in the
 same product.
 

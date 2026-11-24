@@ -15,9 +15,12 @@ name: "⚙️ SecObserve Scan"
 # project-ci.yaml calls this after the build, the synced caller secobserve-scan.yml nightly,
 # so that new CVEs show up without a new build.
 #
-# The product has to exist in SecObserve. Defaults come from repository/org variables:
-#   SECOBSERVE_API_BASE_URL  e.g. https://secobserve-backend.example.com (without /api)
-#   SECOBSERVE_PRODUCT       product name, default: repository name
+# A missing product is created (like the operator's PRODUCT_AUTO_CREATE), in the product group
+# SECOBSERVE_PRODUCT_GROUP if set; the import itself does not create products. Defaults come
+# from repository/org variables:
+#   SECOBSERVE_API_BASE_URL   e.g. https://secobserve-backend.example.com (without /api)
+#   SECOBSERVE_PRODUCT        product name, default: repository name
+#   SECOBSERVE_PRODUCT_GROUP  product group for a new product (must exist), default: none
 #   GCP_REGISTRY_PATH        like project-ci, default: cors-wolke/cors/<repo>
 
 on:
@@ -47,6 +50,16 @@ on:
         required: false
         type: string
         default: ""
+      product-group:
+        description: "Product group for a new product. Default: variable SECOBSERVE_PRODUCT_GROUP, else none"
+        required: false
+        type: string
+        default: ""
+      create-product:
+        description: "Create the product if it does not exist (the API user needs permission to create products)"
+        required: false
+        type: boolean
+        default: true
       # --- mode: image ---
       image-tag:
         description: "Tag of the images to scan. Default: <ref>-latest (pushed by containerize.yaml)"
@@ -153,6 +166,54 @@ jobs:
             echo "tag=${TAG:-${REF}-latest}"
           } >> "$GITHUB_OUTPUT"
           echo "product: ${PRODUCT} — branch: ${SO_BRANCH:-$REF} — mode: ${MODE}"
+
+      # The import (file_upload_observations_by_name) needs an existing product. The nightly run
+      # calls this workflow once per branch at the same time: a POST that loses the race is
+      # answered with an error, then the product exists and the second lookup finds it.
+      - name: Ensure product
+        env:
+          API: ${{ steps.base.outputs.api_base_url }}/api
+          TOKEN: ${{ secrets.secobserve_api_token }}
+          PRODUCT: ${{ steps.base.outputs.product }}
+          GROUP: ${{ inputs.product-group || vars.SECOBSERVE_PRODUCT_GROUP }}
+          CREATE: ${{ inputs.create-product }}
+          REPO: ${{ github.repository }}
+        run: |
+          auth=(-H "Authorization: APIToken ${TOKEN}" -H "Accept: application/json")
+          # the name filter is "icontains": match the exact name ourselves
+          find_id() {
+            curl -fsS -G "${auth[@]}" --data-urlencode "name=$2" --data-urlencode "page_size=100" "${API}/$1/" |
+              jq -r --arg n "$2" '[.results[] | select(.name == $n) | .id][0] // empty'
+          }
+          id="$(find_id products "$PRODUCT")"
+          if [ -n "$id" ]; then
+            echo "Product '${PRODUCT}' exists (id ${id})"
+            exit 0
+          fi
+          if [ "$CREATE" != "true" ]; then
+            echo "::error title=SecObserve scan::Product '${PRODUCT}' does not exist in SecObserve"
+            exit 1
+          fi
+          payload="$(jq -n --arg n "$PRODUCT" --arg r "$REPO" \
+            '{name: $n, description: ("Created by the SecObserve scan of " + $r + " (cors-gmbh/shared-workflows).")}')"
+          if [ -n "$GROUP" ]; then
+            group_id="$(find_id product_groups "$GROUP")"
+            if [ -z "$group_id" ]; then
+              echo "::error title=SecObserve scan::Product group '${GROUP}' does not exist in SecObserve"
+              exit 1
+            fi
+            payload="$(jq --argjson g "$group_id" '. + {product_group: $g}' <<<"$payload")"
+          fi
+          # shellcheck disable=SC2016  # %{http_code} is curl's, not the shell's
+          if response="$(curl -sS -w '\n%{http_code}' "${auth[@]}" -H "Content-Type: application/json" \
+              -d "$payload" "${API}/products/")" && [ "$(tail -n1 <<<"$response")" = "201" ]; then
+            echo "Created product '${PRODUCT}'${GROUP:+ in product group '${GROUP}'}"
+          elif [ -n "$(find_id products "$PRODUCT")" ]; then
+            echo "Product '${PRODUCT}' was created concurrently"
+          else
+            echo "::error title=SecObserve scan::Could not create product '${PRODUCT}': $(head -n -1 <<<"$response")"
+            exit 1
+          fi
 
       - name: Checkout Dockerfile
         if: inputs.mode == 'image' && inputs.images == ''
