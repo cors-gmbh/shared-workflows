@@ -164,6 +164,14 @@ on:
           .pimcore.nginx.image.tag = "$TAG"
           .pimcore.supervisord.image.tag = "$TAG"
           .pimcore.pimcore.cli.image.tag = "$TAG"
+      # --- SecObserve (forwarded to secobserve-scan.yaml) ---
+      secobserve-scan:
+        description: >-
+          Scan after the build and import into SecObserve: "image" (the built images), "app" (the lock
+          files of the repository) or "" (off). Independent of the trivy-secobserve-operator.
+        required: false
+        type: string
+        default: ""
     secrets:
       composer_auth:
         required: false
@@ -181,6 +189,8 @@ on:
       gh_app_id:
         required: false
       npm_github_pat:
+        required: false
+      secobserve_api_token:
         required: false
 
 jobs:
@@ -395,3 +405,24 @@ jobs:
       cd_push_token: ${{ secrets.cd_push_token }}
       gh_app_private_key: ${{ secrets.gh_app_private_key }}
       gh_app_id: ${{ secrets.gh_app_id }}
+
+  # --- Vulnerability scan into SecObserve (after build, does not block the deployment) ---
+  secobserve:
+    name: "SecObserve"
+    if: inputs.secobserve-scan == 'image' || inputs.secobserve-scan == 'app'
+    needs: [prep, build]
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/secobserve-scan.yaml
+    with:
+      mode: ${{ inputs.secobserve-scan }}
+      ref: ${{ github.ref_name }}
+      image-tag: ${{ needs.prep.outputs.tag }}
+      dockerfile: ${{ inputs.dockerfile }}
+      registry: ${{ inputs.registry }}
+      gcp-registry-url: ${{ inputs.gcp-registry-url }}
+      gcp-registry-path: ${{ needs.prep.outputs.registry-path }}
+    secrets:
+      secobserve_api_token: ${{ secrets.secobserve_api_token }}
+      gcp_credentials: ${{ secrets.gcp_credentials }}

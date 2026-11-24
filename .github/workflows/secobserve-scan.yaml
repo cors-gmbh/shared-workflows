@@ -1,0 +1,299 @@
+name: "⚙️ SecObserve Scan"
+
+# Scans a project with Trivy and imports the result into SecObserve, independent of the
+# trivy-secobserve-operator (for projects that do not run in one of our clusters, or whose
+# CI or infrastructure is elsewhere). Scan and import are SecObserve's own actions
+# (SecObserve/secobserve_actions_templates), pinned to a commit.
+#
+#   mode: image  scans the images built by containerize.yaml in the registry (OS packages,
+#                PHP runtime from the image SBOM, composer/npm packages in the image)
+#   mode: app    scans the lock files of the repository (composer.lock, package-lock.json,
+#                yarn.lock), for projects without an image of ours
+#
+# One vulnerability check per (product, branch, service) with the stable file name
+# ci_<service>.cdx.json: SecObserve resolves findings that disappear between two imports.
+# project-ci.yaml calls this after the build, the synced caller secobserve-scan.yml nightly,
+# so that new CVEs show up without a new build.
+#
+# The product has to exist in SecObserve. Defaults come from repository/org variables:
+#   SECOBSERVE_API_BASE_URL  e.g. https://secobserve-backend.example.com (without /api)
+#   SECOBSERVE_PRODUCT       product name, default: repository name
+#   GCP_REGISTRY_PATH        like project-ci, default: cors-wolke/cors/<repo>
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "image or app"
+        required: true
+        type: string
+      ref:
+        description: "Branch to scan: its <ref>-latest images (image) or its lock files (app). Default: the triggering branch"
+        required: false
+        type: string
+        default: ""
+      secobserve-branch:
+        description: "Branch / version in SecObserve. Default: ref"
+        required: false
+        type: string
+        default: ""
+      product:
+        description: "SecObserve product. Default: repository variable SECOBSERVE_PRODUCT, else the repository name"
+        required: false
+        type: string
+        default: ""
+      api-base-url:
+        description: "SecObserve backend URL without /api. Default: variable SECOBSERVE_API_BASE_URL"
+        required: false
+        type: string
+        default: ""
+      # --- mode: image ---
+      image-tag:
+        description: "Tag of the images to scan. Default: <ref>-latest (pushed by containerize.yaml)"
+        required: false
+        type: string
+        default: ""
+      images:
+        description: >-
+          JSON array of image names to scan, e.g. ["php-alpine","nginx"]. Default: derived from the
+          Dockerfile like containerize.yaml (cors_php -> php-alpine or php-alpine-fpm, cors_nginx -> nginx).
+          The blackfire/supervisord/cli variants of pimcore-docker 9.x are left out: same packages as fpm.
+        required: false
+        type: string
+        default: ""
+      dockerfile:
+        required: false
+        type: string
+        default: "Dockerfile"
+      registry:
+        description: "ghcr or gcp"
+        required: false
+        type: string
+        default: "gcp"
+      gcp-registry-url:
+        required: false
+        type: string
+        default: "europe-west3-docker.pkg.dev"
+      gcp-registry-path:
+        description: "Default: repository variable GCP_REGISTRY_PATH, else cors-wolke/cors/<repo name>"
+        required: false
+        type: string
+        default: ""
+      # --- mode: app ---
+      app-path:
+        description: "Directory with the lock files, relative to the repository root"
+        required: false
+        type: string
+        default: "."
+    secrets:
+      secobserve_api_token:
+        description: "API token of a SecObserve user with the Upload role in the product"
+        required: true
+      gcp_credentials:
+        description: "GCP service account key (base64), to pull the images (mode image, registry gcp)"
+        required: false
+
+jobs:
+  resolve:
+    name: "Resolve scan targets"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      ref: ${{ steps.base.outputs.ref }}
+      secobserve-branch: ${{ steps.base.outputs.secobserve_branch }}
+      product: ${{ steps.base.outputs.product }}
+      api-base-url: ${{ steps.base.outputs.api_base_url }}
+      prefix: ${{ steps.base.outputs.prefix }}
+      tag: ${{ steps.base.outputs.tag }}
+      images: ${{ steps.images.outputs.images }}
+    steps:
+      - name: Resolve product, branch & registry
+        id: base
+        env:
+          MODE: ${{ inputs.mode }}
+          REF: ${{ inputs.ref || github.ref_name }}
+          SO_BRANCH: ${{ inputs.secobserve-branch }}
+          PRODUCT: ${{ inputs.product || vars.SECOBSERVE_PRODUCT || github.event.repository.name }}
+          API_BASE_URL: ${{ inputs.api-base-url || vars.SECOBSERVE_API_BASE_URL }}
+          TOKEN: ${{ secrets.secobserve_api_token }}
+          TAG: ${{ inputs.image-tag }}
+          REGISTRY_TYPE: ${{ inputs.registry }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          GCP_REGISTRY_URL: ${{ inputs.gcp-registry-url }}
+          REGISTRY_PATH: ${{ inputs.gcp-registry-path || vars.GCP_REGISTRY_PATH }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          case "$MODE" in
+            image|app) ;;
+            *) echo "::error title=SecObserve scan::mode must be 'image' or 'app', got '${MODE}'"; exit 1 ;;
+          esac
+          if [ -z "$API_BASE_URL" ]; then
+            echo "::error title=SecObserve scan::No SecObserve URL: set the variable SECOBSERVE_API_BASE_URL (org or repository) or the input api-base-url"
+            exit 1
+          fi
+          if [ -z "$TOKEN" ]; then
+            echo "::error title=SecObserve scan::The secret SECOBSERVE_API_TOKEN is not available to this repository"
+            exit 1
+          fi
+          # Same prefix as containerize.yaml
+          if [ "$REGISTRY_TYPE" = "ghcr" ]; then
+            prefix="ghcr.io/$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')"
+          else
+            repo=$(echo "$REPO" | tr '[:upper:]' '[:lower:]')
+            prefix="${GCP_REGISTRY_URL}/${REGISTRY_PATH:-cors-wolke/cors/${repo}}"
+          fi
+          {
+            echo "ref=${REF}"
+            echo "secobserve_branch=${SO_BRANCH:-$REF}"
+            echo "product=${PRODUCT}"
+            echo "api_base_url=${API_BASE_URL%/}"
+            echo "prefix=${prefix}"
+            echo "tag=${TAG:-${REF}-latest}"
+          } >> "$GITHUB_OUTPUT"
+          echo "product: ${PRODUCT} — branch: ${SO_BRANCH:-$REF} — mode: ${MODE}"
+
+      - name: Checkout Dockerfile
+        if: inputs.mode == 'image' && inputs.images == ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.base.outputs.ref }}
+          sparse-checkout: ${{ inputs.dockerfile }}
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve images
+        id: images
+        if: inputs.mode == 'image'
+        env:
+          IMAGES: ${{ inputs.images }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+        run: |
+          if [ -n "$IMAGES" ]; then
+            images="$(jq -c . <<<"$IMAGES")"
+          else
+            stage() {
+              local target="$1"
+              grep -iE "^FROM[[:space:]].*[[:space:]]AS[[:space:]]+${target}[[:space:]]*(#.*)?$" "$DOCKERFILE" | head -1 || true
+            }
+            images='[]'
+            php="$(stage cors_php)"
+            if [ -n "$php" ]; then
+              # pimcore-docker >= 10 builds one image named php-alpine (see containerize.yaml)
+              if grep -qE "pimcore-docker/pimcore(-slim)?:" <<<"$php"; then name="php-alpine"; else name="php-alpine-fpm"; fi
+              images="$(jq -c --arg n "$name" '. + [$n]' <<<"$images")"
+            fi
+            [ -n "$(stage cors_nginx)" ] && images="$(jq -c '. + ["nginx"]' <<<"$images")"
+          fi
+          if [ "$(jq 'length' <<<"$images")" = "0" ]; then
+            echo "::error title=SecObserve scan::No images to scan: no cors_php/cors_nginx stage in ${DOCKERFILE}, set the input images"
+            exit 1
+          fi
+          echo "images=${images}" >> "$GITHUB_OUTPUT"
+          echo "Scanning: $(jq -r 'join(", ")' <<<"$images")"
+
+  image:
+    name: "Trivy image: ${{ matrix.image }}"
+    needs: resolve
+    if: inputs.mode == 'image'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read  # GHCR images
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.resolve.outputs.images) }}
+    env:
+      REPORT: ci_${{ matrix.image }}.cdx.json
+      TARGET: ${{ needs.resolve.outputs.prefix }}/${{ matrix.image }}:${{ needs.resolve.outputs.tag }}
+    steps:
+      # The SecObserve action is a container action: it runs with HOME=/github/home, which the
+      # runner mounts from $RUNNER_TEMP/_github_home. Trivy reads the registry credentials from
+      # $HOME/.docker/config.json, so the login writes them there. Removed again at the end.
+      - name: Log in to GCP Artifact Registry
+        if: inputs.registry == 'gcp'
+        env:
+          GCP_CREDENTIALS: ${{ secrets.gcp_credentials }}
+          GCP_REGISTRY_URL: ${{ inputs.gcp-registry-url }}
+        run: |
+          if [ -z "$GCP_CREDENTIALS" ]; then
+            echo "::error title=SecObserve scan::The secret GCP_CREDENTIALS is needed to pull from ${GCP_REGISTRY_URL}"
+            exit 1
+          fi
+          echo "$GCP_CREDENTIALS" | base64 -d | \
+            docker --config "$RUNNER_TEMP/_github_home/.docker" login -u _json_key --password-stdin "https://${GCP_REGISTRY_URL}"
+
+      - name: Log in to GHCR
+        if: inputs.registry == 'ghcr'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          echo "$TOKEN" | docker --config "$RUNNER_TEMP/_github_home/.docker" login -u "$ACTOR" --password-stdin ghcr.io
+
+      - name: Scan & import
+        # release 2026_11
+        uses: SecObserve/secobserve_actions_templates/actions/SCA/trivy_image@d7632ba734e5c2cdbb553b37d90c38509b03bc4d
+        with:
+          target: ${{ env.TARGET }}
+          report_name: ${{ env.REPORT }}
+          so_api_base_url: ${{ needs.resolve.outputs.api-base-url }}
+          so_api_token: ${{ secrets.secobserve_api_token }}
+          so_product_name: ${{ needs.resolve.outputs.product }}
+          so_branch_name: ${{ needs.resolve.outputs.secobserve-branch }}
+          so_origin_service: ${{ matrix.image }}
+          so_origin_docker_image_name_tag: ${{ env.TARGET }}
+          so_suppress_licenses: "false"
+
+      - name: Remove registry credentials
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/_github_home/.docker"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: secobserve-${{ needs.resolve.outputs.secobserve-branch }}-${{ matrix.image }}
+          path: ${{ env.REPORT }}
+          if-no-files-found: ignore
+          retention-days: 14
+
+  app:
+    name: "Trivy filesystem"
+    needs: resolve
+    if: inputs.mode == 'app'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      REPORT: ci_app.cdx.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+
+      - name: Scan & import
+        # release 2026_11
+        uses: SecObserve/secobserve_actions_templates/actions/SCA/trivy_filesystem@d7632ba734e5c2cdbb553b37d90c38509b03bc4d
+        with:
+          target: ${{ inputs.app-path }}
+          report_name: ${{ env.REPORT }}
+          so_api_base_url: ${{ needs.resolve.outputs.api-base-url }}
+          so_api_token: ${{ secrets.secobserve_api_token }}
+          so_product_name: ${{ needs.resolve.outputs.product }}
+          so_branch_name: ${{ needs.resolve.outputs.secobserve-branch }}
+          so_origin_service: app
+          so_suppress_licenses: "false"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: secobserve-${{ needs.resolve.outputs.secobserve-branch }}-app
+          path: ${{ env.REPORT }}
+          if-no-files-found: ignore
+          retention-days: 14
