@@ -12,6 +12,7 @@ Reusable GitHub Actions workflows for CORS Pimcore projects and bundles.
 | `php-test.yaml` | `test` stage (project + bundle) | ECS, PHPStan, Psalm, Twig/YAML/Container lint, Helm lint, PHPUnit (unit and functional, see [PHPUnit](#phpunit)), Infection (see [Mutation testing](#mutation-testing)) |
 | `containerize.yaml` | `build_and_push` stage | Multi-target Docker build, GHCR or GCP registry; targets missing from the Dockerfile are skipped (pimcore-docker 9.x and 10.x projects) |
 | `update-manifest.yaml` | `update_manifest` stage | CD repo update via yq or helm template (GitOps) |
+| `secobserve-scan.yaml` | — | Trivy scan of the built images or of the lock files, imported into SecObserve (see [SecObserve scan](#secobserve-scan)) |
 | `frontend-build.yaml` | — | Build Pimcore Studio frontend (Rsbuild), type-check, commit assets |
 | `pr-guardrail.yml` | — | PR guardrails: branch/issue conventions, description, CI state ([docs](docs/GUARDRAILS.md)) |
 | `pr-to-project.yml` | — | Add PRs to the Projects-V2 boards of their linked issues |
@@ -132,6 +133,46 @@ push, so the expression falls back to the whole code base there):
 
 The checkout has the full history, so `--git-diff-*` finds its base. Both inputs are also
 forwarded by `project-ci.yaml`.
+
+### SecObserve scan
+
+`secobserve-scan.yaml` scans a project with Trivy and imports the result into SecObserve,
+independent of the [trivy-secobserve-operator](https://github.com/cors-gmbh/trivy-secobserve-operator):
+for projects that do not run in one of our clusters, or whose CI or infrastructure is elsewhere.
+Scan and import are SecObserve's own actions
+([secobserve_actions_templates](https://github.com/SecObserve/secobserve_actions_templates),
+pinned to a commit).
+
+- `mode: image` scans the images that `containerize.yaml` pushed, in the registry: OS packages,
+  the PHP runtime (from the image SBOM) and the composer/npm packages in the image. Which images
+  is derived from the Dockerfile like `containerize.yaml` does: `cors_php` → `php-alpine`
+  (pimcore-docker >= 10) or `php-alpine-fpm`, `cors_nginx` → `nginx`. The blackfire, supervisord
+  and cli variants of 9.x are left out (same packages as fpm); `images` overrides the list.
+- `mode: app` scans the lock files of the repository (`composer.lock`, `package-lock.json`,
+  `yarn.lock`), for projects without an image of ours. The PHP runtime and the OS packages of the
+  server are not part of it.
+
+Every service (image name, or `app`) gets its own vulnerability check with the stable file name
+`ci_<service>.cdx.json`, so SecObserve resolves findings that disappear between two imports.
+Licenses are imported, too (`so_suppress_licenses: false`).
+
+`project-ci.yaml` runs it after the build with `secobserve-scan: image|app`; in the synced
+`ci.yaml` that is the repository variable `SECOBSERVE_SCAN`. The job does not block the
+manifest update. A scan right after the build only knows the CVEs of that day, so the synced
+caller `secobserve-scan.yml` (from `shared-workflows-private`) scans again every night.
+
+| Variable / secret | Where | |
+|---|---|---|
+| `SECOBSERVE_API_BASE_URL` | variable (org) | backend URL without `/api` |
+| `SECOBSERVE_API_TOKEN` | secret (org) | user with the `Upload` role in the products |
+| `SECOBSERVE_SCAN` | variable (repo) | `image` or `app`; not set = no scan |
+| `SECOBSERVE_PRODUCT` | variable (repo) | product name, default: repository name |
+| `SECOBSERVE_REFS` | variable (repo) | nightly scan: JSON list of branches, default `[PROD_BRANCH, STAGE_BRANCH]` |
+
+The product has to exist in SecObserve (the import does not create it); the branch is the git
+branch (`master`, `staging`) and is created on the first import. A project that the operator
+already covers should not be scanned here as well: both would report the same findings in the
+same product.
 
 ### Studio frontend build (`.github/workflows/frontend-build.yaml`)
 
